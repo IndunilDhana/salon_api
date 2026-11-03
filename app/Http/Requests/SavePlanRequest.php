@@ -30,7 +30,9 @@ class SavePlanRequest extends FormRequest
             'currency' => [$required, Rule::in(['LKR', 'USD', 'GBP', 'EUR', 'INR', 'AUD'])],
             'billing_interval' => [$required, Rule::in(['month', 'year'])],
             'active' => ['sometimes', 'boolean'],
-            'features' => [$this->isMethod('PATCH') ? 'sometimes' : 'present', 'array', 'max:5'],
+            'included_branches' => ['sometimes', 'integer', 'min:1', 'max:100'],
+            'price_per_additional_branch_minor' => ['sometimes', 'integer', 'min:0', 'max:100000000000'],
+            'features' => [$this->isMethod('PATCH') ? 'sometimes' : 'present', 'array', 'max:10'],
             'features.*' => ['string', 'distinct', Rule::in(array_keys(SubscriptionService::FEATURES))],
             'storage_mode' => ['prohibited'],
         ];

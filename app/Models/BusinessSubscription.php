@@ -14,6 +14,19 @@ class BusinessSubscription extends Model
 
     protected function casts(): array
     {
-        return ['price_minor' => 'integer', 'features' => 'array', 'trial_starts_at' => 'immutable_datetime', 'trial_ends_at' => 'immutable_datetime', 'current_period_start' => 'immutable_datetime', 'current_period_end' => 'immutable_datetime', 'cancelled_at' => 'immutable_datetime'];
+        return [
+            'price_minor' => 'integer',
+            'included_branches' => 'integer',
+            'price_per_additional_branch_minor' => 'integer',
+            'active_branches_count' => 'integer',
+            'base_price_minor' => 'integer',
+            'additional_branch_fee_minor' => 'integer',
+            'features' => 'array',
+            'trial_starts_at' => 'immutable_datetime',
+            'trial_ends_at' => 'immutable_datetime',
+            'current_period_start' => 'immutable_datetime',
+            'current_period_end' => 'immutable_datetime',
+            'cancelled_at' => 'immutable_datetime',
+        ];
     }
 }

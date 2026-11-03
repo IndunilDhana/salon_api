@@ -4,6 +4,7 @@ use App\Http\Controllers\AccessController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AppointmentController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\BranchController;
 use App\Http\Controllers\CatalogController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DeductionController;
@@ -41,6 +42,10 @@ Route::prefix('v1')->group(function () {
             Route::patch('users/{id}/role', [PlatformAccessController::class, 'assignUserRole'])->middleware('platform_permission:platform.access.manage');
         });
         Route::middleware('tenant')->group(function () {
+            Route::get('branches', [BranchController::class, 'index'])->middleware(['permission:branches.view|dashboard.view', 'subscription']);
+            Route::post('branches', [BranchController::class, 'store'])->middleware(['permission:branches.manage|access.manage', 'subscription']);
+            Route::patch('branches/{id}', [BranchController::class, 'update'])->middleware(['permission:branches.manage|access.manage', 'subscription']);
+            Route::delete('branches/{id}', [BranchController::class, 'destroy'])->middleware(['permission:branches.manage|access.manage', 'subscription']);
             Route::get('subscription', [BusinessSubscriptionController::class, 'show']);
             Route::get('catalog', [CatalogController::class, 'index'])->middleware(['permission:catalog.view', 'subscription:catalog']);
             Route::post('catalog', [CatalogController::class, 'store'])->middleware(['permission:catalog.manage', 'subscription:catalog']);

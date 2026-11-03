@@ -10,6 +10,7 @@ use App\Models\Staff;
 use App\Tenancy\TenantContext;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
@@ -60,10 +61,26 @@ class ReportController extends Controller
         $startUtc = $startLocal->utc();
         $endUtc = $endLocal->utc();
 
+        // Branch scoping
+        $selectedBranchId = $request->query('branch_id') ?: $context->branchId;
+        if ($selectedBranchId === 'all') {
+            $selectedBranchId = null;
+        }
+
+        $enforceBranches = null;
+        if ($selectedBranchId) {
+            $enforceBranches = [$selectedBranchId];
+        } elseif ($context->allowedBranchIds !== null) {
+            $enforceBranches = $context->allowedBranchIds;
+        }
+
         // 1. Orders within range
-        $orders = Order::where('created_at', '>=', $startUtc)
-            ->where('created_at', '<=', $endUtc)
-            ->get();
+        $ordersQuery = Order::where('created_at', '>=', $startUtc)
+            ->where('created_at', '<=', $endUtc);
+        if ($enforceBranches !== null) {
+            $ordersQuery->whereIn('branch_id', $enforceBranches);
+        }
+        $orders = $ordersQuery->get();
 
         $paidOrders = $orders->where('status', 'paid');
         $unpaidOrders = $orders->where('status', 'unpaid');
@@ -127,10 +144,20 @@ class ReportController extends Controller
         $dailyTrend = array_values($dailyTrendMap);
 
         // 2. Staff performance
-        $allStaff = Staff::all();
-        $appointmentsInRange = Appointment::where('starts_at', '>=', $startUtc)
-            ->where('starts_at', '<=', $endUtc)
-            ->get();
+        $staffQuery = Staff::query();
+        if ($enforceBranches !== null) {
+            $staffQuery->where(function ($q) use ($enforceBranches) {
+                $q->whereIn('branch_id', $enforceBranches)->orWhereNull('branch_id');
+            });
+        }
+        $allStaff = $staffQuery->get();
+
+        $apptsQuery = Appointment::where('starts_at', '>=', $startUtc)
+            ->where('starts_at', '<=', $endUtc);
+        if ($enforceBranches !== null) {
+            $apptsQuery->whereIn('branch_id', $enforceBranches);
+        }
+        $appointmentsInRange = $apptsQuery->get();
 
         $staffPerformance = [];
         foreach ($allStaff as $member) {
@@ -146,6 +173,7 @@ class ReportController extends Controller
                 'name' => $member->name,
                 'job_title' => $member->job_title,
                 'active' => (bool) $member->active,
+                'branch_id' => $member->branch_id,
                 'commission_rate' => $member->commission_bps / 100,
                 'orders_count' => $billsCount,
                 'appointments_count' => $memberAppointments->count(),
@@ -218,10 +246,9 @@ class ReportController extends Controller
 
         $uniqueClientsCount = $appointmentsInRange->pluck('customer_name')->filter()->unique()->count();
 
-        // Time slots
-        $morningCount = 0;   // < 12:00
-        $afternoonCount = 0; // 12:00 - 16:59
-        $eveningCount = 0;   // >= 17:00
+        $morningCount = 0;
+        $afternoonCount = 0;
+        $eveningCount = 0;
 
         $dayOfWeekMap = [
             'Monday' => 0,
@@ -271,13 +298,14 @@ class ReportController extends Controller
         $estimatedBaseSalaryExpense = (int) round($activeStaffMonthlyBase * $salaryMultiplier);
         $totalStaffCostMinor = $totalCommissionMinor + $estimatedBaseSalaryExpense;
 
-        $dailyDeductionsExpenseMinor = (int) Deduction::where('type', 'business')
-            ->whereBetween('date', [$startLocal->toDateString(), $endLocal->toDateString()])
-            ->sum('amount_minor');
+        $deductionsQuery = Deduction::whereBetween('date', [$startLocal->toDateString(), $endLocal->toDateString()]);
+        if ($enforceBranches !== null) {
+            $deductionsQuery->whereIn('branch_id', $enforceBranches);
+        }
+        $deductionsInRange = $deductionsQuery->get();
 
-        $staffAdvancesTotalMinor = (int) Deduction::where('type', 'staff_advance')
-            ->whereBetween('date', [$startLocal->toDateString(), $endLocal->toDateString()])
-            ->sum('amount_minor');
+        $dailyDeductionsExpenseMinor = (int) $deductionsInRange->where('type', 'business')->sum('amount_minor');
+        $staffAdvancesTotalMinor = (int) $deductionsInRange->where('type', 'staff_advance')->sum('amount_minor');
 
         $totalOperatingCostsMinor = $totalStaffCostMinor + $dailyDeductionsExpenseMinor;
         $netMarginMinor = $grossRevenueMinor - $totalOperatingCostsMinor;
@@ -295,6 +323,44 @@ class ReportController extends Controller
             'net_margin_percentage' => $netMarginPercentage,
         ];
 
+        // 6. Branch comparison table
+        $allBranches = DB::connection('tenant')->table('branches')
+            ->where('tenant_id', $tenant->id)
+            ->where('active', true)
+            ->orderByDesc('is_main')
+            ->orderBy('name')
+            ->get();
+
+        $branchBreakdown = [];
+        foreach ($allBranches as $b) {
+            $bOrders = $paidOrders->where('branch_id', $b->id);
+            $bRev = (int) $bOrders->sum('total_minor');
+            $bCommission = (int) $bOrders->sum('commission_minor');
+            $bStaffBase = (int) $allStaff->where('branch_id', $b->id)->where('active', true)->sum('base_salary_minor');
+            $bEstBaseSalary = (int) round($bStaffBase * $salaryMultiplier);
+            $bTotalStaffCost = $bCommission + $bEstBaseSalary;
+            $bDed = (int) $deductionsInRange->where('branch_id', $b->id)->where('type', 'business')->sum('amount_minor');
+            $bAdvances = (int) $deductionsInRange->where('branch_id', $b->id)->where('type', 'staff_advance')->sum('amount_minor');
+            $bNetMargin = $bRev - $bTotalStaffCost - $bDed;
+            $bAppts = $appointmentsInRange->where('branch_id', $b->id)->count();
+
+            $branchBreakdown[] = [
+                'id' => $b->id,
+                'name' => $b->name,
+                'code' => $b->code,
+                'is_main' => (bool) $b->is_main,
+                'orders_count' => $bOrders->count(),
+                'appointments_count' => $bAppts,
+                'revenue_minor' => $bRev,
+                'staff_cost_minor' => $bTotalStaffCost,
+                'deductions_minor' => $bDed,
+                'advances_minor' => $bAdvances,
+                'profit_minor' => $bNetMargin,
+                'profit_margin_percentage' => $bRev > 0 ? round(($bNetMargin / $bRev) * 100, 1) : 0,
+                'contribution_percentage' => $grossRevenueMinor > 0 ? round(($bRev / $grossRevenueMinor) * 100, 1) : 0,
+            ];
+        }
+
         return [
             'meta' => [
                 'range' => $range,
@@ -302,6 +368,14 @@ class ReportController extends Controller
                 'end_date' => $endLocal->toDateString(),
                 'timezone' => $tz,
                 'currency' => $tenant->currency ?: 'LKR',
+                'branch_id' => $selectedBranchId,
+                'is_centralized' => $selectedBranchId === null,
+                'branches' => $allBranches->map(fn ($b) => [
+                    'id' => $b->id,
+                    'name' => $b->name,
+                    'code' => $b->code,
+                    'is_main' => (bool) $b->is_main,
+                ]),
             ],
             'sales' => [
                 'gross_revenue_minor' => $grossRevenueMinor,
@@ -318,6 +392,7 @@ class ReportController extends Controller
             'catalog' => $catalogSummary,
             'appointments' => $appointmentTrends,
             'financial' => $financialSummary,
+            'branches_comparison' => $branchBreakdown,
         ];
     }
 }

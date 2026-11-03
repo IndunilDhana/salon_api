@@ -30,7 +30,8 @@ class AuthController extends Controller
             'currency' => ['sometimes', Rule::in(['LKR', 'USD', 'GBP', 'EUR', 'INR', 'AUD'])],
             'timezone' => ['sometimes', 'timezone'],
         ]);
-        $user = DB::connection('central')->transaction(function () use ($data) {
+        $tenant = null;
+        $user = DB::connection('central')->transaction(function () use ($data, &$tenant) {
             $user = User::create(['name' => $data['name'], 'email' => strtolower($data['email']), 'password' => $data['password']]);
             $tenant = Tenant::create(['name' => $data['salon_name'], 'slug' => $data['slug'], 'currency' => $data['currency'] ?? 'LKR', 'timezone' => $data['timezone'] ?? 'Asia/Colombo', 'storage_mode' => 'shared']);
             $roles = RoleCatalog::seed($tenant);
@@ -40,6 +41,17 @@ class AuthController extends Controller
 
             return $user;
         });
+
+        DB::connection('tenant')->table('branches')->insert([
+            'id' => (string) Str::uuid(),
+            'tenant_id' => $tenant->id,
+            'name' => 'Main Branch',
+            'code' => 'MAIN',
+            'is_main' => true,
+            'active' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
 
         return response()->json($this->session($user, true), 201);
     }

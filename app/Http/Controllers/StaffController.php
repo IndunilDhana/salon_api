@@ -15,7 +15,24 @@ class StaffController extends Controller
 {
     public function staff()
     {
-        return ['data' => Staff::orderBy('name')->get()];
+        $context = app(TenantContext::class);
+        $query = Staff::with('branch');
+        if ($context->branchId) {
+            $query->where(function ($q) use ($context) {
+                $q->where('branch_id', $context->branchId)->orWhereNull('branch_id');
+            });
+        } elseif ($context->allowedBranchIds !== null) {
+            $query->where(function ($q) use ($context) {
+                $q->whereIn('branch_id', $context->allowedBranchIds)->orWhereNull('branch_id');
+            });
+        }
+
+        return ['data' => $query->orderBy('name')->get()->map(function (Staff $s) {
+            return [
+                ...$s->toArray(),
+                'branch_name' => $s->branch?->name,
+            ];
+        })];
     }
 
     private function normalizeContactInputs(Request $request): void
@@ -66,6 +83,7 @@ class StaffController extends Controller
             'base_salary_minor' => [$required, 'integer', 'min:0', 'max:100000000000'],
             'commission_bps' => [$required, 'integer', 'between:0,10000'],
             'active' => ['sometimes', 'boolean'],
+            'branch_id' => ['nullable', 'uuid', Rule::exists('tenant.branches', 'id')->where('tenant_id', $tenantId)],
             'user_id' => ['nullable', 'uuid'],
             'tenant_id' => ['prohibited'],
         ];
@@ -88,7 +106,20 @@ class StaffController extends Controller
         unset($data['password']);
 
         $tenantId = app(TenantContext::class)->id();
+        $context = app(TenantContext::class);
 
+        if (empty($data['branch_id'])) {
+            $data['branch_id'] = $context->branchId;
+            if (! $data['branch_id']) {
+                $mainBranch = DB::connection('tenant')->table('branches')
+                    ->where('tenant_id', $tenantId)
+                    ->where('is_main', true)
+                    ->first();
+                $data['branch_id'] = $mainBranch?->id;
+            }
+        }
+
+        $user = null;
         if (! empty($data['email']) && ! empty($password)) {
             $email = $data['email'];
             $user = User::create([
@@ -109,6 +140,17 @@ class StaffController extends Controller
                     'user_id' => $user->id,
                     'role_id' => $staffRole->id,
                     'role' => $staffRole->name,
+                ]);
+            }
+
+            if (! empty($data['branch_id'])) {
+                DB::connection('central')->table('branch_users')->insertOrIgnore([
+                    'id' => (string) Str::uuid(),
+                    'tenant_id' => $tenantId,
+                    'user_id' => $user->id,
+                    'branch_id' => $data['branch_id'],
+                    'created_at' => now(),
+                    'updated_at' => now(),
                 ]);
             }
         }

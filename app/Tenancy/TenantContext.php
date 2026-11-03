@@ -13,6 +13,12 @@ class TenantContext
 
     public array $permissions = [];
 
+    public ?string $branchId = null;
+
+    public ?array $allowedBranchIds = null;
+
+    public bool $hasAllBranchesAccess = false;
+
     public function id(): string
     {
         return $this->tenant?->id ?? throw new LogicException('Tenant context is required for business data.');
@@ -23,5 +29,8 @@ class TenantContext
         $this->tenant = null;
         $this->role = null;
         $this->permissions = [];
+        $this->branchId = null;
+        $this->allowedBranchIds = null;
+        $this->hasAllBranchesAccess = false;
     }
 }

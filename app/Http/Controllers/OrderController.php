@@ -32,18 +32,27 @@ class OrderController extends Controller
 
     public function index(): array
     {
-        return ['data' => Order::with('items')->latest()->limit(250)->get()->map(fn (Order $order) => $this->orderData($order))];
+        $context = app(TenantContext::class);
+        $query = Order::with(['items', 'branch']);
+        if ($context->branchId) {
+            $query->where('branch_id', $context->branchId);
+        } elseif ($context->allowedBranchIds !== null) {
+            $query->whereIn('branch_id', $context->allowedBranchIds);
+        }
+
+        return ['data' => $query->latest()->limit(250)->get()->map(fn (Order $order) => $this->orderData($order))];
     }
 
     public function show(string $id): array
     {
-        return ['data' => $this->orderData(Order::with('items')->findOrFail($id))];
+        return ['data' => $this->orderData(Order::with(['items', 'branch'])->findOrFail($id))];
     }
 
     public function store(Request $request, OrderService $service): JsonResponse
     {
         $data = $request->validate([
             'customer_name' => ['required', 'string', 'max:120'],
+            'branch_id' => ['nullable', 'uuid'],
             'staff_id' => ['nullable', 'uuid', Rule::exists('tenant.staff', 'id')->where('tenant_id', app(TenantContext::class)->id())->where('active', true)],
             'items' => ['required', 'array', 'min:1', 'max:100'],
             'items.*' => ['required', 'array:catalog_item_id,quantity'],
@@ -80,7 +89,8 @@ class OrderController extends Controller
     private function orderData(Order $order): array
     {
         return [
-            ...$order->only(['id', 'number', 'customer_name', 'status', 'payment_method', 'subtotal_minor', 'total_minor', 'staff_id', 'staff_name', 'commission_bps', 'commission_minor']),
+            ...$order->only(['id', 'number', 'customer_name', 'status', 'payment_method', 'subtotal_minor', 'total_minor', 'staff_id', 'staff_name', 'commission_bps', 'commission_minor', 'branch_id']),
+            'branch_name' => $order->branch?->name,
             'created_at' => $order->created_at->toISOString(),
             'paid_at' => $order->paid_at?->toISOString(),
             'items' => $order->items->map(fn ($item) => $item->only(['id', 'catalog_item_id', 'name', 'type', 'quantity', 'unit_price_minor', 'total_minor'])),

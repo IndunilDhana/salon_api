@@ -31,9 +31,22 @@ class AccessController extends Controller
                 ->orderBy('users.name')
                 ->get(['membership.id', 'membership.role_id', 'users.id as user_id', 'users.name', 'users.email', 'role.name as role']);
 
+            $branchUsers = DB::connection('central')->table('branch_users')
+                ->where('tenant_id', $tenantId)
+                ->get()
+                ->groupBy('user_id');
+
+            $branches = DB::connection('tenant')->table('branches')
+                ->where('tenant_id', $tenantId)
+                ->where('active', true)
+                ->orderByDesc('is_main')
+                ->orderBy('name')
+                ->get(['id', 'name', 'code', 'is_main']);
+
             return [
                 'roles' => $roles->map(fn (TenantRole $role) => $this->roleData($role)),
-                'members' => $members->map(fn ($member) => $this->memberData($member)),
+                'members' => $members->map(fn ($member) => $this->memberData($member, $branchUsers)),
+                'branches' => $branches,
                 'permissions' => collect(RoleCatalog::permissions())->map(fn ($label, $key) => ['key' => $key, 'label' => $label])->values(),
             ];
         });
@@ -95,6 +108,8 @@ class AccessController extends Controller
             'email' => ['required', 'email', 'max:255'],
             'password' => ['nullable', 'string', 'min:8', 'max:72'],
             'role_id' => ['required', 'uuid'],
+            'branch_ids' => ['nullable', 'array'],
+            'branch_ids.*' => ['uuid'],
             'tenant_id' => ['prohibited'],
             'is_platform_admin' => ['prohibited'],
         ]);
@@ -121,13 +136,32 @@ class AccessController extends Controller
             $membershipId = (string) Str::uuid();
             $memberships->insert(['id' => $membershipId, 'tenant_id' => $tenantId, 'user_id' => $user->id, 'role_id' => $role->id, 'role' => $role->name]);
 
-            return response()->json(['data' => ['id' => $membershipId, 'user' => $user->only(['id', 'name', 'email']), 'role_id' => $role->id, 'role' => $role->name]], 201);
+            if (!empty($data['branch_ids'])) {
+                foreach ($data['branch_ids'] as $bId) {
+                    DB::connection('central')->table('branch_users')->insertOrIgnore([
+                        'id' => (string) Str::uuid(),
+                        'tenant_id' => $tenantId,
+                        'user_id' => $user->id,
+                        'branch_id' => $bId,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                }
+            }
+
+            return response()->json(['data' => ['id' => $membershipId, 'user' => $user->only(['id', 'name', 'email']), 'role_id' => $role->id, 'role' => $role->name, 'branch_ids' => $data['branch_ids'] ?? []]], 201);
         });
     }
 
     public function updateMember(Request $request, string $id): array
     {
-        $data = $request->validate(['role_id' => ['required', 'uuid'], 'tenant_id' => ['prohibited'], 'user_id' => ['prohibited']]);
+        $data = $request->validate([
+            'role_id' => ['required', 'uuid'],
+            'branch_ids' => ['nullable', 'array'],
+            'branch_ids.*' => ['uuid'],
+            'tenant_id' => ['prohibited'],
+            'user_id' => ['prohibited'],
+        ]);
 
         return $this->withActor($request, function (TenantRole $actor, string $tenantId) use ($request, $data, $id) {
             $member = $this->tenantMember($tenantId, $id);
@@ -135,9 +169,37 @@ class AccessController extends Controller
             $role = $this->tenantRole($tenantId, $data['role_id']);
             $this->assertRoleAssignable($actor, $role);
             DB::connection('central')->table('memberships')->where('tenant_id', $tenantId)->where('id', $id)->update(['role_id' => $role->id, 'role' => $role->name]);
-            $user = User::findOrFail($member->user_id);
 
-            return ['data' => ['id' => $id, 'user' => $user->only(['id', 'name', 'email']), 'role_id' => $role->id, 'role' => $role->name]];
+            if (array_key_exists('branch_ids', $data)) {
+                DB::connection('central')->table('branch_users')->where('tenant_id', $tenantId)->where('user_id', $member->user_id)->delete();
+                if (!empty($data['branch_ids'])) {
+                    foreach ($data['branch_ids'] as $bId) {
+                        DB::connection('central')->table('branch_users')->insertOrIgnore([
+                            'id' => (string) Str::uuid(),
+                            'tenant_id' => $tenantId,
+                            'user_id' => $member->user_id,
+                            'branch_id' => $bId,
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ]);
+                    }
+                }
+            }
+
+            $user = User::findOrFail($member->user_id);
+            $assignedBranchIds = DB::connection('central')->table('branch_users')
+                ->where('tenant_id', $tenantId)
+                ->where('user_id', $user->id)
+                ->pluck('branch_id')
+                ->all();
+
+            return ['data' => [
+                'id' => $id,
+                'user' => $user->only(['id', 'name', 'email']),
+                'role_id' => $role->id,
+                'role' => $role->name,
+                'branch_ids' => $assignedBranchIds,
+            ]];
         });
     }
 
@@ -239,8 +301,24 @@ class AccessController extends Controller
         return $role->only(['id', 'name', 'permissions', 'is_owner']);
     }
 
-    private function memberData(object $member): array
+    private function memberData(object $member, $branchUsersMap = null): array
     {
-        return ['id' => $member->id, 'user' => ['id' => $member->user_id, 'name' => $member->name, 'email' => $member->email], 'role_id' => $member->role_id, 'role' => $member->role];
+        $assignedBranchIds = [];
+        if ($branchUsersMap !== null && isset($branchUsersMap[$member->user_id])) {
+            $assignedBranchIds = $branchUsersMap[$member->user_id]->pluck('branch_id')->all();
+        } else {
+            $assignedBranchIds = DB::connection('central')->table('branch_users')
+                ->where('user_id', $member->user_id)
+                ->pluck('branch_id')
+                ->all();
+        }
+
+        return [
+            'id' => $member->id,
+            'user' => ['id' => $member->user_id, 'name' => $member->name, 'email' => $member->email],
+            'role_id' => $member->role_id,
+            'role' => $member->role,
+            'branch_ids' => $assignedBranchIds,
+        ];
     }
 }

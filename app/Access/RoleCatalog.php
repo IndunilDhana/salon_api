@@ -19,6 +19,7 @@ final class RoleCatalog
             'orders.assign_staff' => ['orders.manage', 'orders.view', 'catalog.view'],
             'payroll.manage' => ['payroll.view'],
             'deductions.manage' => ['deductions.view'],
+            'branches.manage' => ['branches.view'],
         ];
     }
 
@@ -51,6 +52,8 @@ final class RoleCatalog
             'orders.assign_staff' => 'Assign team members to customer bills',
             'deductions.view' => 'View business deductions and staff advances',
             'deductions.manage' => 'Record business deductions and staff advances',
+            'branches.view' => 'View business branches and switch locations',
+            'branches.manage' => 'Create, edit, and configure business branches',
         ];
     }
 
@@ -59,8 +62,8 @@ final class RoleCatalog
     {
         $defaults = [
             'owner' => ['Owner', array_keys(self::permissions()), true],
-            'manager' => ['Manager', ['dashboard.view', 'reports.view', 'staff.view', 'staff.manage', 'appointments.view', 'appointments.manage', 'catalog.view', 'catalog.manage', 'orders.view', 'orders.manage', 'orders.assign_staff', 'deductions.view', 'deductions.manage'], false],
-            'staff' => ['Staff', ['dashboard.view', 'appointments.view', 'catalog.view', 'orders.view'], false],
+            'manager' => ['Manager', ['dashboard.view', 'reports.view', 'staff.view', 'staff.manage', 'appointments.view', 'appointments.manage', 'catalog.view', 'catalog.manage', 'orders.view', 'orders.manage', 'orders.assign_staff', 'deductions.view', 'deductions.manage', 'branches.view', 'branches.manage'], false],
+            'staff' => ['Staff', ['dashboard.view', 'appointments.view', 'catalog.view', 'orders.view', 'branches.view'], false],
         ];
 
         $roles = [];

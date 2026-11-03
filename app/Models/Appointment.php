@@ -13,4 +13,9 @@ class Appointment extends TenantRecord
     {
         return $this->belongsTo(Staff::class);
     }
+
+    public function branch()
+    {
+        return $this->belongsTo(Branch::class, 'branch_id');
+    }
 }

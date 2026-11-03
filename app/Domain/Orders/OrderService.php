@@ -73,14 +73,25 @@ class OrderService
             $commissionBps = $staff ? $staff->commission_bps : 0;
             $commissionMinor = $staff ? intdiv($subtotal * $commissionBps + 5000, 10000) : 0;
 
+            $context = app(TenantContext::class);
+            $branchId = $data['branch_id'] ?? $context->branchId;
+            if (!$branchId) {
+                $mainBranch = DB::connection('tenant')->table('branches')
+                    ->where('tenant_id', $context->id())
+                    ->where('is_main', true)
+                    ->first();
+                $branchId = $mainBranch?->id;
+            }
+
             $order = Order::create([
                 'number' => 'BILL-'.Str::ulid(),
                 'customer_name' => trim($data['customer_name']),
-                'currency' => app(TenantContext::class)->tenant->currency,
+                'currency' => $context->tenant->currency,
                 'status' => $status,
                 'payment_method' => $method,
                 'subtotal_minor' => $subtotal,
                 'total_minor' => $subtotal,
+                'branch_id' => $branchId,
                 'staff_id' => $staff?->id,
                 'staff_name' => $staff?->name,
                 'commission_bps' => $commissionBps,

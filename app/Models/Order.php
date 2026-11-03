@@ -26,4 +26,9 @@ class Order extends TenantRecord
     {
         return $this->belongsTo(Staff::class, 'staff_id');
     }
+
+    public function branch()
+    {
+        return $this->belongsTo(Branch::class, 'branch_id');
+    }
 }

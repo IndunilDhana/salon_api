@@ -10,6 +10,7 @@ use App\Models\Order;
 use App\Models\Staff;
 use App\Tenancy\TenantContext;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
 {
@@ -24,31 +25,48 @@ class DashboardController extends Controller
         $monthStart = $day->startOfMonth()->startOfDay();
         $monthEnd = $day->endOfMonth()->endOfDay();
 
+        $selectedBranchId = $context->branchId;
+        $enforceBranches = null;
+        if ($selectedBranchId) {
+            $enforceBranches = [$selectedBranchId];
+        } elseif ($context->allowedBranchIds !== null) {
+            $enforceBranches = $context->allowedBranchIds;
+        }
+
         // 1. Appointments today
-        $appointments = Appointment::with('staff')
+        $apptsQuery = Appointment::with(['staff', 'branch'])
             ->where('starts_at', '>=', $day->utc())
-            ->where('starts_at', '<', $day->addDay()->utc())
-            ->orderBy('starts_at')
-            ->get();
+            ->where('starts_at', '<', $day->addDay()->utc());
+        if ($enforceBranches !== null) {
+            $apptsQuery->whereIn('branch_id', $enforceBranches);
+        }
+        $appointments = $apptsQuery->orderBy('starts_at')->get();
 
         $completedTodayAppointments = $appointments->where('status', 'completed');
         $appointmentRevenueTodayMinor = (int) $completedTodayAppointments->sum('price_minor');
 
         // 2. Orders today and this month
-        $paidOrdersToday = Order::where('status', 'paid')
-            ->whereBetween('created_at', [$day->utc(), $endOfDay->utc()])
-            ->get();
-        $paidOrdersMonth = Order::where('status', 'paid')
-            ->whereBetween('created_at', [$monthStart->utc(), $monthEnd->utc()])
-            ->get();
+        $ordersTodayQuery = Order::where('status', 'paid')
+            ->whereBetween('created_at', [$day->utc(), $endOfDay->utc()]);
+        $ordersMonthQuery = Order::where('status', 'paid')
+            ->whereBetween('created_at', [$monthStart->utc(), $monthEnd->utc()]);
+        if ($enforceBranches !== null) {
+            $ordersTodayQuery->whereIn('branch_id', $enforceBranches);
+            $ordersMonthQuery->whereIn('branch_id', $enforceBranches);
+        }
+        $paidOrdersToday = $ordersTodayQuery->get();
+        $paidOrdersMonth = $ordersMonthQuery->get();
 
         $ordersRevenueTodayMinor = (int) $paidOrdersToday->sum('total_minor');
         $ordersRevenueMonthMinor = (int) $paidOrdersMonth->sum('total_minor');
 
         // Month completed appointments revenue
-        $completedMonthAppointmentsRevenueMinor = (int) Appointment::where('status', 'completed')
-            ->whereBetween('starts_at', [$monthStart->utc(), $monthEnd->utc()])
-            ->sum('price_minor');
+        $apptsMonthQuery = Appointment::where('status', 'completed')
+            ->whereBetween('starts_at', [$monthStart->utc(), $monthEnd->utc()]);
+        if ($enforceBranches !== null) {
+            $apptsMonthQuery->whereIn('branch_id', $enforceBranches);
+        }
+        $completedMonthAppointmentsRevenueMinor = (int) $apptsMonthQuery->sum('price_minor');
 
         $effectiveTodayRevenueMinor = max($appointmentRevenueTodayMinor, $ordersRevenueTodayMinor);
         $effectiveMonthRevenueMinor = max($ordersRevenueMonthMinor, $completedMonthAppointmentsRevenueMinor);
@@ -57,13 +75,15 @@ class DashboardController extends Controller
         $canViewDeductions = in_array('deductions.view', $context->permissions, true)
             || in_array('payroll.view', $context->permissions, true);
 
-        $todayDeductions = $canViewDeductions
-            ? Deduction::where('date', $day->toDateString())->get()
-            : collect();
+        $todayDeductionsQuery = Deduction::where('date', $day->toDateString());
+        $monthDeductionsQuery = Deduction::whereBetween('date', [$day->startOfMonth()->toDateString(), $day->endOfMonth()->toDateString()]);
+        if ($enforceBranches !== null) {
+            $todayDeductionsQuery->whereIn('branch_id', $enforceBranches);
+            $monthDeductionsQuery->whereIn('branch_id', $enforceBranches);
+        }
 
-        $monthDeductions = $canViewDeductions
-            ? Deduction::whereBetween('date', [$day->startOfMonth()->toDateString(), $day->endOfMonth()->toDateString()])->get()
-            : collect();
+        $todayDeductions = $canViewDeductions ? $todayDeductionsQuery->get() : collect();
+        $monthDeductions = $canViewDeductions ? $monthDeductionsQuery->get() : collect();
 
         $todayBusinessDeductionsMinor = (int) $todayDeductions->where('type', 'business')->sum('amount_minor');
         $todayStaffAdvancesMinor = (int) $todayDeductions->where('type', 'staff_advance')->sum('amount_minor');
@@ -74,7 +94,13 @@ class DashboardController extends Controller
         $monthTotalDeductionsMinor = $monthBusinessDeductionsMinor + $monthStaffAdvancesMinor;
 
         // 4. Staff costs & Net Margin
-        $activeStaff = Staff::where('active', true)->get();
+        $staffQuery = Staff::where('active', true);
+        if ($enforceBranches !== null) {
+            $staffQuery->where(function ($q) use ($enforceBranches) {
+                $q->whereIn('branch_id', $enforceBranches)->orWhereNull('branch_id');
+            });
+        }
+        $activeStaff = $staffQuery->get();
         $activeStaffCount = $activeStaff->count();
         $monthlyBaseSalariesMinor = (int) $activeStaff->sum('base_salary_minor');
         $monthlyCommissionsMinor = (int) $paidOrdersMonth->sum('commission_minor');
@@ -129,6 +155,13 @@ class DashboardController extends Controller
             'month_count' => $monthDeductions->count(),
         ];
 
+        $branches = DB::connection('tenant')->table('branches')
+            ->where('tenant_id', $tenant->id)
+            ->where('active', true)
+            ->orderByDesc('is_main')
+            ->orderBy('name')
+            ->get(['id', 'name', 'code', 'is_main']);
+
         return [
             'tenant' => [
                 ...$context->tenant->only(['id', 'name', 'slug', 'currency', 'timezone', 'storage_mode', 'status']),
@@ -137,6 +170,9 @@ class DashboardController extends Controller
                 'subscription' => app(SubscriptionService::class)->summary($context->tenant->subscription),
             ],
             'date' => $day->toDateString(),
+            'active_branch_id' => $selectedBranchId,
+            'has_all_access' => $context->hasAllBranchesAccess,
+            'branches' => $branches,
             'metrics' => [
                 'appointments_today' => $appointments->count(),
                 'completed_today' => $completedTodayAppointments->count(),

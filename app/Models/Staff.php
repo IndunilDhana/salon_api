@@ -16,6 +16,11 @@ class Staff extends TenantRecord
         return $this->hasMany(Order::class, 'staff_id');
     }
 
+    public function branch()
+    {
+        return $this->belongsTo(Branch::class, 'branch_id');
+    }
+
     public static function resolveForUser(User $user, string $tenantId): self
     {
         // 1. Match by user_id in this tenant
@@ -57,6 +62,8 @@ class Staff extends TenantRecord
             return $staff;
         }
 
+        $mainBranch = Branch::where('tenant_id', $tenantId)->where('is_main', true)->first();
+
         // 4. Automatically create staff record for this tenant user
         return self::create([
             'tenant_id' => $tenantId,
@@ -67,6 +74,7 @@ class Staff extends TenantRecord
             'base_salary_minor' => 0,
             'commission_bps' => 0,
             'active' => true,
+            'branch_id' => $mainBranch?->id,
         ]);
     }
 }
