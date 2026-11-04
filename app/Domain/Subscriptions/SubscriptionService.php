@@ -39,7 +39,7 @@ class SubscriptionService
                 'base_price_minor' => 0,
                 'included_branches' => 1,
                 'price_per_additional_branch_minor' => 0,
-                'active_branches_count' => 1,
+                'active_branches_count' => 0,
                 'additional_branch_fee_minor' => 0,
                 'currency' => $tenant->currency,
                 'billing_interval' => 'month',
@@ -57,7 +57,7 @@ class SubscriptionService
 
     public function summary(?BusinessSubscription $subscription): ?array
     {
-        if (!$subscription) {
+        if (! $subscription) {
             return null;
         }
         $now = CarbonImmutable::now('UTC');
@@ -88,11 +88,11 @@ class SubscriptionService
         $activeBranchesCount = (int) (DB::connection('tenant')->table('branches')
             ->where('tenant_id', $tenant->id)
             ->where('active', true)
-            ->count() ?: 1);
+            ->count());
 
         return DB::connection('central')->transaction(function () use ($tenant, $actorId, $activeBranchesCount) {
             $subscription = BusinessSubscription::where('tenant_id', $tenant->id)->lockForUpdate()->first();
-            if (!$subscription) {
+            if (! $subscription) {
                 return null;
             }
 
@@ -100,7 +100,7 @@ class SubscriptionService
             $pricePerExtra = (int) ($subscription->price_per_additional_branch_minor ?? 0);
             $extra = max(0, $activeBranchesCount - $included);
             $additionalFee = $extra * $pricePerExtra;
-            $basePrice = (int) ($subscription->base_price_minor ?: $subscription->price_minor);
+            $basePrice = (int) ($subscription->base_price_minor ?? $subscription->price_minor);
             $totalPrice = $basePrice + $additionalFee;
 
             if (
@@ -125,7 +125,7 @@ class SubscriptionService
         $activeBranchesCount = (int) (DB::connection('tenant')->table('branches')
             ->where('tenant_id', $tenant->id)
             ->where('active', true)
-            ->count() ?: 1);
+            ->count());
 
         return DB::connection('central')->transaction(function () use ($tenant, $data, $actorId, $activeBranchesCount) {
             Tenant::whereKey($tenant->id)->lockForUpdate()->firstOrFail();
@@ -135,10 +135,11 @@ class SubscriptionService
                     $subscription->update(['status' => 'cancelled', 'cancelled_at' => now()->utc()]);
                     $this->record($subscription, 'cancelled', $actorId);
                 }
+
                 return $subscription;
             }
             $plan = SubscriptionPlan::lockForUpdate()->find($data['plan_id']);
-            if (!$plan || !$plan->active) {
+            if (! $plan || ! $plan->active) {
                 throw ValidationException::withMessages(['plan_id' => ['Choose an active subscription plan.']]);
             }
             $end = CarbonImmutable::parse($data['current_period_end'])->utc();

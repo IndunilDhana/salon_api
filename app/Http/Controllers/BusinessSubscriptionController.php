@@ -7,6 +7,8 @@ use App\Http\Requests\ChangeSubscriptionRequest;
 use App\Models\SubscriptionPlan;
 use App\Models\Tenant;
 use App\Tenancy\TenantContext;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class BusinessSubscriptionController extends Controller
 {
@@ -19,7 +21,7 @@ class BusinessSubscriptionController extends Controller
     {
         $tenant = Tenant::findOrFail($id);
         $result = $this->data($tenant, $service);
-        $result['history'] = \Illuminate\Support\Facades\DB::connection('central')->table('subscription_changes')
+        $result['history'] = DB::connection('central')->table('subscription_changes')
             ->leftJoin('users', 'subscription_changes.actor_id', '=', 'users.id')
             ->where('subscription_changes.tenant_id', $tenant->id)
             ->select('subscription_changes.*', 'users.name as actor_name', 'users.email as actor_email')
@@ -30,7 +32,7 @@ class BusinessSubscriptionController extends Controller
         return $result;
     }
 
-    public function extendTrial(\Illuminate\Http\Request $request, SubscriptionService $service, string $id): array
+    public function extendTrial(Request $request, SubscriptionService $service, string $id): array
     {
         $days = (int) ($request->input('days', 30));
         $subscription = $service->extendTrial(Tenant::findOrFail($id), $days, $request->user()->id);

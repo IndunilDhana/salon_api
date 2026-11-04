@@ -5,8 +5,10 @@ namespace App\Http\Controllers;
 use App\Domain\Subscriptions\SubscriptionService;
 use App\Models\Branch;
 use App\Tenancy\TenantContext;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
@@ -82,16 +84,34 @@ class BranchController extends Controller
             'code' => ['nullable', 'string', 'max:32'],
             'phone' => ['nullable', 'string', 'max:40'],
             'address' => ['nullable', 'string', 'max:255'],
+            'active' => ['sometimes', 'boolean'],
         ]);
 
-        $branch = Branch::create([
-            'name' => trim($data['name']),
-            'code' => isset($data['code']) ? strtoupper(trim($data['code'])) : null,
-            'phone' => isset($data['phone']) ? trim($data['phone']) : null,
-            'address' => isset($data['address']) ? trim($data['address']) : null,
-            'is_main' => false,
-            'active' => true,
-        ]);
+        try {
+            $branch = Cache::lock('branches:create:'.$tenantId, 30)->block(5, function () use ($data, $context, $tenantId) {
+                return DB::connection('tenant')->transaction(function () use ($data, $context, $tenantId) {
+                    $isFirst = ! DB::connection('tenant')->table('branches')->where('tenant_id', $tenantId)->exists();
+                    if ($isFirst) {
+                        abort_unless($context->hasAllBranchesAccess, 403, 'First branch setup requires access to the whole business.');
+                        abort_if(($data['active'] ?? true) === false, 422, 'Your first branch must be active.');
+                    } else {
+                        $subscription = app(SubscriptionService::class)->summary($context->tenant->subscription);
+                        abort_unless(in_array('branches', $subscription['features'] ?? [], true), 403, 'Multiple branches are not included in this business subscription.');
+                    }
+
+                    return Branch::create([
+                        'name' => trim($data['name']),
+                        'code' => isset($data['code']) ? strtoupper(trim($data['code'])) : null,
+                        'phone' => isset($data['phone']) ? trim($data['phone']) : null,
+                        'address' => isset($data['address']) ? trim($data['address']) : null,
+                        'is_main' => $isFirst,
+                        'active' => $data['active'] ?? true,
+                    ]);
+                }, 3);
+            });
+        } catch (LockTimeoutException) {
+            abort(409, 'Another branch is being created. Please try again.');
+        }
 
         // Sync dynamic subscription pricing
         $subscriptionService = app(SubscriptionService::class);
@@ -154,24 +174,15 @@ class BranchController extends Controller
             abort(422, 'The main branch cannot be deleted.');
         }
 
-        $hasOrders = DB::connection('tenant')->table('orders')->where('branch_id', $id)->exists();
-        $hasAppointments = DB::connection('tenant')->table('appointments')->where('branch_id', $id)->exists();
-
-        if ($hasOrders || $hasAppointments) {
-            // Deactivate rather than hard delete to preserve historical integrity
-            $branch->update(['active' => false]);
-            $action = 'deactivated';
-        } else {
-            $branch->delete();
-            $action = 'deleted';
-        }
+        // Retain staff, expense, membership and historical references to this branch.
+        $branch->update(['active' => false]);
 
         $subscriptionService = app(SubscriptionService::class);
         $subscriptionService->syncDynamicPricing($context->tenant, $request->user()->id);
         $updatedSubscription = $subscriptionService->summary($context->tenant->fresh()->subscription);
 
         return response()->json([
-            'message' => "Branch successfully {$action}.",
+            'message' => 'Branch successfully deactivated.',
             'subscription' => $updatedSubscription,
         ]);
     }

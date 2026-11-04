@@ -2,15 +2,15 @@
 
 namespace App\Http\Controllers;
 
+use App\Domain\Subscriptions\SubscriptionService;
 use App\Http\Resources\AppointmentResource;
 use App\Models\Appointment;
+use App\Models\Branch;
 use App\Models\Deduction;
-use App\Domain\Subscriptions\SubscriptionService;
 use App\Models\Order;
 use App\Models\Staff;
 use App\Tenancy\TenantContext;
 use Carbon\CarbonImmutable;
-use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
 {
@@ -46,10 +46,8 @@ class DashboardController extends Controller
         $appointmentRevenueTodayMinor = (int) $completedTodayAppointments->sum('price_minor');
 
         // 2. Orders today and this month
-        $ordersTodayQuery = Order::where('status', 'paid')
-            ->whereBetween('created_at', [$day->utc(), $endOfDay->utc()]);
-        $ordersMonthQuery = Order::where('status', 'paid')
-            ->whereBetween('created_at', [$monthStart->utc(), $monthEnd->utc()]);
+        $ordersTodayQuery = Order::paidDuring($day->utc(), $day->addDay()->utc());
+        $ordersMonthQuery = Order::paidDuring($monthStart->utc(), $monthStart->addMonth()->utc());
         if ($enforceBranches !== null) {
             $ordersTodayQuery->whereIn('branch_id', $enforceBranches);
             $ordersMonthQuery->whereIn('branch_id', $enforceBranches);
@@ -68,8 +66,9 @@ class DashboardController extends Controller
         }
         $completedMonthAppointmentsRevenueMinor = (int) $apptsMonthQuery->sum('price_minor');
 
-        $effectiveTodayRevenueMinor = max($appointmentRevenueTodayMinor, $ordersRevenueTodayMinor);
-        $effectiveMonthRevenueMinor = max($ordersRevenueMonthMinor, $completedMonthAppointmentsRevenueMinor);
+        // Completed-service value is a separate metric; cash revenue comes from paid bills.
+        $effectiveTodayRevenueMinor = $ordersRevenueTodayMinor;
+        $effectiveMonthRevenueMinor = $ordersRevenueMonthMinor;
 
         // 3. Deductions today & this month
         $canViewDeductions = in_array('deductions.view', $context->permissions, true)
@@ -123,7 +122,7 @@ class DashboardController extends Controller
             $monthStatus = 'break_even';
         }
 
-        $todayNetMinor = $appointmentRevenueTodayMinor - $todayTotalDeductionsMinor;
+        $todayNetMinor = $effectiveTodayRevenueMinor - $todayTotalDeductionsMinor;
         $todayStatus = $todayNetMinor > 0 ? 'growth' : ($todayNetMinor < 0 ? 'loss' : 'neutral');
 
         $businessPosition = [
@@ -136,7 +135,7 @@ class DashboardController extends Controller
             'month_total_operating_costs_minor' => $monthTotalOperatingCostsMinor,
             'month_net_margin_minor' => $monthNetMarginMinor,
             'month_net_margin_percentage' => $monthNetMarginPercentage,
-            'today_revenue_minor' => $appointmentRevenueTodayMinor,
+            'today_revenue_minor' => $effectiveTodayRevenueMinor,
             'today_deductions_minor' => $todayTotalDeductionsMinor,
             'today_business_expenses_minor' => $todayBusinessDeductionsMinor,
             'today_staff_advances_minor' => $todayStaffAdvancesMinor,
@@ -155,8 +154,7 @@ class DashboardController extends Controller
             'month_count' => $monthDeductions->count(),
         ];
 
-        $branches = DB::connection('tenant')->table('branches')
-            ->where('tenant_id', $tenant->id)
+        $branches = Branch::query()
             ->where('active', true)
             ->orderByDesc('is_main')
             ->orderBy('name')

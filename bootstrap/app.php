@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Middleware\EnsureBranchSetup;
+use App\Http\Middleware\EnsureSubscription;
 use App\Http\Middleware\RequirePermission;
 use App\Http\Middleware\RequirePlatformAdmin;
 use App\Http\Middleware\RequirePlatformPermission;
@@ -16,7 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        $middleware->alias(['tenant' => ResolveTenant::class, 'permission' => RequirePermission::class, 'platform_admin' => RequirePlatformAdmin::class, 'platform_permission' => RequirePlatformPermission::class, 'subscription' => \App\Http\Middleware\EnsureSubscription::class]);
+        $middleware->alias(['tenant' => ResolveTenant::class, 'branch_setup' => EnsureBranchSetup::class, 'permission' => RequirePermission::class, 'platform_admin' => RequirePlatformAdmin::class, 'platform_permission' => RequirePlatformPermission::class, 'subscription' => EnsureSubscription::class]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

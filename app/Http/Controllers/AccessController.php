@@ -136,7 +136,7 @@ class AccessController extends Controller
             $membershipId = (string) Str::uuid();
             $memberships->insert(['id' => $membershipId, 'tenant_id' => $tenantId, 'user_id' => $user->id, 'role_id' => $role->id, 'role' => $role->name]);
 
-            if (!empty($data['branch_ids'])) {
+            if (! empty($data['branch_ids'])) {
                 foreach ($data['branch_ids'] as $bId) {
                     DB::connection('central')->table('branch_users')->insertOrIgnore([
                         'id' => (string) Str::uuid(),
@@ -172,7 +172,7 @@ class AccessController extends Controller
 
             if (array_key_exists('branch_ids', $data)) {
                 DB::connection('central')->table('branch_users')->where('tenant_id', $tenantId)->where('user_id', $member->user_id)->delete();
-                if (!empty($data['branch_ids'])) {
+                if (! empty($data['branch_ids'])) {
                     foreach ($data['branch_ids'] as $bId) {
                         DB::connection('central')->table('branch_users')->insertOrIgnore([
                             'id' => (string) Str::uuid(),
@@ -245,6 +245,7 @@ class AccessController extends Controller
     /** Serialize access changes and re-read authorization after obtaining the tenant lock. */
     private function withActor(Request $request, Closure $action): mixed
     {
+        abort_unless(app(TenantContext::class)->hasAllBranchesAccess, 403, 'Managing business-wide access requires access to all branches.');
         $tenantId = app(TenantContext::class)->id();
 
         return DB::connection('central')->transaction(function () use ($request, $action, $tenantId) {

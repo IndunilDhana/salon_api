@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\Staff;
-use App\Tenancy\TenantContext;
 use Tests\TestCase;
 
 class DeductionTest extends TestCase

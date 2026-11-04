@@ -1,6 +1,5 @@
 <?php
 
-use App\Access\RoleCatalog;
 use App\Models\TenantRole;
 use Illuminate\Database\Migrations\Migration;
 

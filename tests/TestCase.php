@@ -31,9 +31,16 @@ abstract class TestCase extends BaseTestCase
         }
     }
 
-    public function registerOwner(string $email = 'owner@example.test', string $slug = 'studio-test'): array
+    public function registerOwner(string $email = 'owner@example.test', string $slug = 'studio-test', bool $completeBranchSetup = true): array
     {
-        return $this->postJson('/api/v1/register', ['name' => 'Salon Owner', 'email' => $email, 'password' => 'password', 'password_confirmation' => 'password', 'salon_name' => 'Test Salon', 'slug' => $slug])->assertCreated()->json();
+        $session = $this->postJson('/api/v1/register', ['name' => 'Salon Owner', 'email' => $email, 'password' => 'password', 'password_confirmation' => 'password', 'salon_name' => 'Test Salon', 'slug' => $slug])->assertCreated()->json();
+        if ($completeBranchSetup) {
+            $headers = $this->headers($session['token'], $slug);
+            $this->postJson('/api/v1/branches', ['name' => 'Main Branch', 'code' => 'MAIN'], $headers)->assertCreated();
+            $session = [...$session, ...$this->getJson('/api/v1/me', $headers)->assertOk()->json()];
+        }
+
+        return $session;
     }
 
     public function headers(string $token, string $slug): array

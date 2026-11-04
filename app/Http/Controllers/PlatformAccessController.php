@@ -40,6 +40,8 @@ class PlatformAccessController extends Controller
             'permissions.*' => ['string', Rule::in($validPermissions)],
         ]);
 
+        $this->authorizePermissions($request->user(), $data['permissions']);
+
         $role = PlatformRole::create([
             'name' => $data['name'],
             'description' => $data['description'] ?? null,
@@ -53,6 +55,8 @@ class PlatformAccessController extends Controller
     public function updateRole(Request $request, string $id)
     {
         $role = PlatformRole::findOrFail($id);
+        $this->authorizePermissions($request->user(), $role->permissions);
+        abort_if($request->user()->platform_role_id === $role->id, 403, 'You cannot change your own platform role.');
 
         if ($role->is_super_admin) {
             throw ValidationException::withMessages([
@@ -68,6 +72,7 @@ class PlatformAccessController extends Controller
             'permissions.*' => ['string', Rule::in($validPermissions)],
         ]);
 
+        $this->authorizePermissions($request->user(), $data['permissions']);
         $role->update([
             'name' => $data['name'],
             'description' => $data['description'] ?? null,
@@ -77,9 +82,10 @@ class PlatformAccessController extends Controller
         return ['data' => $role];
     }
 
-    public function deleteRole(string $id)
+    public function deleteRole(Request $request, string $id)
     {
         $role = PlatformRole::findOrFail($id);
+        $this->authorizePermissions($request->user(), $role->permissions);
 
         if ($role->is_super_admin) {
             throw ValidationException::withMessages([
@@ -101,6 +107,10 @@ class PlatformAccessController extends Controller
     public function assignUserRole(Request $request, string $userId)
     {
         $user = User::findOrFail($userId);
+        if ($user->is_platform_admin) {
+            $this->authorizePermissions($request->user(), $user->getPlatformPermissions());
+        }
+        abort_if($request->user()->id === $user->id, 403, 'You cannot change your own platform access.');
 
         $data = $request->validate([
             'is_platform_admin' => ['required', 'boolean'],
@@ -114,8 +124,12 @@ class PlatformAccessController extends Controller
         }
 
         if ($data['is_platform_admin'] && empty($data['platform_role_id'])) {
+            $this->authorizePermissions($request->user(), array_keys(PlatformRoleCatalog::permissions()));
             $defaultRole = PlatformRole::where('is_super_admin', true)->first();
             $data['platform_role_id'] = $defaultRole?->id;
+        }
+        if ($data['is_platform_admin'] && ! empty($data['platform_role_id'])) {
+            $this->authorizePermissions($request->user(), PlatformRole::findOrFail($data['platform_role_id'])->permissions);
         }
 
         $user->update([
@@ -124,5 +138,10 @@ class PlatformAccessController extends Controller
         ]);
 
         return ['data' => $user->fresh(['platformRole'])];
+    }
+
+    private function authorizePermissions(User $actor, array $permissions): void
+    {
+        abort_if(array_diff($permissions, $actor->getPlatformPermissions()) !== [], 403, 'You cannot manage platform permissions beyond your own access.');
     }
 }

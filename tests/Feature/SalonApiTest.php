@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\PersonalAccessToken;
 use App\Models\Staff;
 use App\Models\TenantRole;
 use App\Models\User;
@@ -43,7 +44,7 @@ class SalonApiTest extends TestCase
         $this->assertNotEmpty($me['expires_at']);
 
         // Find the token in central database and expire it
-        $personalToken = \App\Models\PersonalAccessToken::findToken($owner['token']);
+        $personalToken = PersonalAccessToken::findToken($owner['token']);
         $this->assertNotNull($personalToken);
         $personalToken->forceFill(['expires_at' => now()->subMinutes(5)])->save();
 
@@ -59,7 +60,7 @@ class SalonApiTest extends TestCase
         $this->assertNotEmpty($loginRes['token']);
         $this->assertNotEmpty($loginRes['expires_at']);
 
-        $adminToken = \App\Models\PersonalAccessToken::findToken($loginRes['token']);
+        $adminToken = PersonalAccessToken::findToken($loginRes['token']);
         $this->assertNotNull($adminToken);
 
         // Valid admin request

@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Access\RoleCatalog;
 use App\Domain\Subscriptions\SubscriptionService;
 use App\Models\Appointment;
+use App\Models\Branch;
 use App\Models\CatalogItem;
 use App\Models\Staff;
 use App\Models\Tenant;
@@ -36,6 +37,8 @@ class DatabaseSeeder extends Seeder
             $context = app(TenantContext::class);
             $context->tenant = $tenant;
             try {
+                Branch::firstOrCreate(['is_main' => true], ['name' => 'Main Branch', 'code' => 'MAIN', 'active' => true]);
+                app(SubscriptionService::class)->syncDynamicPricing($tenant);
                 foreach ([['Cut & finish', 'service', 450000], ['Classic cut', 'service', 200000], ['Skin treatment', 'service', 650000], ['Daily care shampoo', 'product', 350000], ['Styling clay', 'product', 280000]] as [$itemName, $type, $price]) {
                     CatalogItem::firstOrCreate(['name' => $itemName], ['type' => $type, 'price_minor' => $price, 'active' => true]);
                 }
@@ -59,6 +62,7 @@ class DatabaseSeeder extends Seeder
                             'role' => $staffRole->name,
                         ]);
                     }
+
                     return Staff::create([...$data, 'user_id' => $user->id, 'active' => true]);
                 });
                 $day = CarbonImmutable::today($tenant->timezone);

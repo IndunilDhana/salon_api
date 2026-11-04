@@ -9,12 +9,14 @@ use App\Models\OrderItem;
 use App\Models\Staff;
 use App\Models\Tenant;
 use App\Tenancy\TenantContext;
+use Carbon\CarbonImmutable;
 use Tests\TestCase;
 
 class BusinessReportTest extends TestCase
 {
     public function test_business_reports_return_comprehensive_metrics(): void
     {
+        $this->travelTo(CarbonImmutable::parse('2026-11-04T00:15:00+05:30'));
         $owner = $this->registerOwner('report-owner@example.test', 'report-salon');
         $tenant = Tenant::where('slug', 'report-salon')->first();
         app(TenantContext::class)->tenant = $tenant;
@@ -69,8 +71,8 @@ class BusinessReportTest extends TestCase
             'staff_id' => $staff->id,
             'customer_name' => 'Nimal Silva',
             'service_name' => 'Haircut & Styling',
-            'starts_at' => now()->startOfDay()->addHours(10),
-            'ends_at' => now()->startOfDay()->addHours(11),
+            'starts_at' => now($tenant->timezone)->startOfDay()->addHours(10)->utc(),
+            'ends_at' => now($tenant->timezone)->startOfDay()->addHours(11)->utc(),
             'price_minor' => 350000,
             'commission_bps' => 1500,
             'status' => 'completed',
@@ -100,9 +102,10 @@ class BusinessReportTest extends TestCase
         $this->assertEquals(52500, $data['staff'][0]['commission_minor']);
         $this->assertEquals(1, $data['appointments']['completed']);
         $this->assertEquals(100.0, $data['appointments']['completion_rate']);
+        $this->travelBack();
     }
 
-    public function test_reports_require_dashboard_or_reports_permission(): void
+    public function test_owner_can_view_business_reports(): void
     {
         $owner = $this->registerOwner('permitted-owner@example.test', 'perm-salon');
         $this->getJson('/api/v1/reports', $this->headers($owner['token'], 'perm-salon'))->assertOk();

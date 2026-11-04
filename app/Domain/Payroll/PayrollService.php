@@ -18,6 +18,7 @@ class PayrollService
 {
     public function generate(User $user, array $data): PayrollRun
     {
+        abort_unless(app(TenantContext::class)->hasAllBranchesAccess, 403, 'Business-wide payroll requires access to all branches.');
         $zone = app(TenantContext::class)->tenant->timezone;
         $start = CarbonImmutable::parse($data['period_start'], $zone)->startOfDay();
         $end = CarbonImmutable::parse($data['period_end'], $zone)->startOfDay();
@@ -27,30 +28,30 @@ class PayrollService
         $run = DB::connection('tenant')->transaction(function () use ($user, $data, $start, $end) {
             // Unique tenant+month constraint also protects concurrent generation.
             abort_if(PayrollRun::where('period_start', '<=', $data['period_end'])->where('period_end', '>=', $data['period_start'])->exists(), 409, 'A payroll draft already exists for this month.');
-            $completed = Appointment::where('status', 'completed')->where('starts_at', '>=', $start->utc())->where('starts_at', '<', $end->addDay()->utc())->get()->groupBy('staff_id');
-            $paidOrders = Order::where('status', 'paid')
+            $completed = Appointment::withoutGlobalScope('branch')->where('status', 'completed')->where('starts_at', '>=', $start->utc())->where('starts_at', '<', $end->addDay()->utc())->get()->groupBy('staff_id');
+            $paidOrders = Order::withoutGlobalScope('branch')->where('status', 'paid')
                 ->whereNotNull('staff_id')
                 ->where(function ($q) use ($start, $end) {
-                    $q->whereBetween('paid_at', [$start->utc(), $end->addDay()->utc()])
+                    $q->where('paid_at', '>=', $start->utc())->where('paid_at', '<', $end->addDay()->utc())
                         ->orWhere(function ($q2) use ($start, $end) {
-                            $q2->whereNull('paid_at')->whereBetween('created_at', [$start->utc(), $end->addDay()->utc()]);
+                            $q2->whereNull('paid_at')->where('created_at', '>=', $start->utc())->where('created_at', '<', $end->addDay()->utc());
                         });
                 })
                 ->get()
                 ->groupBy('staff_id');
 
-            $advances = Deduction::where('type', 'staff_advance')
+            $advances = Deduction::withoutGlobalScope('branch')->where('type', 'staff_advance')
                 ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
                 ->get()
                 ->groupBy('staff_id');
 
-            $staff = Staff::orderBy('name')->get()->filter(fn ($person) => $person->active || $completed->has($person->id) || $paidOrders->has($person->id) || $advances->has($person->id));
+            $staff = Staff::withoutGlobalScope('branch')->orderBy('name')->get()->filter(fn ($person) => $person->active || $completed->has($person->id) || $paidOrders->has($person->id) || $advances->has($person->id));
             abort_if($staff->isEmpty(), 422, 'Add a team member before generating payroll.');
             $run = PayrollRun::create([...$data, 'status' => 'draft', 'total_minor' => 0, 'created_by' => $user->id]);
             $total = 0;
             foreach ($staff as $person) {
                 $appointmentCommission = ($completed->get($person->id) ?? collect())->sum(fn ($appointment) => intdiv($appointment->price_minor * $appointment->commission_bps + 5000, 10000));
-                $orderCommission = ($paidOrders->get($person->id) ?? collect())->sum(fn ($order) => $order->commission_minor ?: intdiv($order->total_minor * ($order->commission_bps ?: $person->commission_bps) + 5000, 10000));
+                $orderCommission = ($paidOrders->get($person->id) ?? collect())->sum(fn ($order) => (int) $order->commission_minor);
                 $commission = $appointmentCommission + $orderCommission;
                 $salary = $person->active ? $person->base_salary_minor : 0;
                 $deduction = (int) ($advances->get($person->id) ?? collect())->sum('amount_minor');

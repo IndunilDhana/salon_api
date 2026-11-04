@@ -38,7 +38,7 @@ class SubscriptionPlanController extends Controller
 
     private function validateFeatures(array $features): void
     {
-        if (in_array('orders', $features, true) && !in_array('catalog', $features, true)) {
+        if (in_array('orders', $features, true) && ! in_array('catalog', $features, true)) {
             throw ValidationException::withMessages(['features' => ['Customer billing also requires the services and products feature.']]);
         }
     }

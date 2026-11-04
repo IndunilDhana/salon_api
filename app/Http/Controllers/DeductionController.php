@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Branch;
 use App\Models\Deduction;
 use App\Models\Staff;
 use App\Tenancy\TenantContext;
@@ -29,8 +30,7 @@ class DeductionController extends Controller
     public function options(): array
     {
         $context = app(TenantContext::class);
-        $branches = DB::connection('tenant')->table('branches')
-            ->where('tenant_id', $context->id())
+        $branches = Branch::query()
             ->where('active', true)
             ->get(['id', 'name', 'is_main']);
 
@@ -93,7 +93,7 @@ class DeductionController extends Controller
                         ->where('date', '<=', $now->endOfMonth()->toDateString());
                     break;
                 case 'last_month':
-                    $lastMonth = $now->subMonth();
+                    $lastMonth = $now->subMonthNoOverflow();
                     $query->where('date', '>=', $lastMonth->startOfMonth()->toDateString())
                         ->where('date', '<=', $lastMonth->endOfMonth()->toDateString());
                     break;
@@ -103,10 +103,12 @@ class DeductionController extends Controller
             }
         }
 
+        $count = (clone $query)->count();
+        $totals = (clone $query)->selectRaw('type, SUM(amount_minor) as total')->groupBy('type')->pluck('total', 'type');
         $items = $query->orderByDesc('date')->orderByDesc('created_at')->limit(300)->get();
 
-        $businessTotal = (int) $items->where('type', 'business')->sum('amount_minor');
-        $staffAdvanceTotal = (int) $items->where('type', 'staff_advance')->sum('amount_minor');
+        $businessTotal = (int) ($totals['business'] ?? 0);
+        $staffAdvanceTotal = (int) ($totals['staff_advance'] ?? 0);
         $grandTotal = $businessTotal + $staffAdvanceTotal;
 
         return [
@@ -115,7 +117,8 @@ class DeductionController extends Controller
                 'total_business_minor' => $businessTotal,
                 'total_staff_advance_minor' => $staffAdvanceTotal,
                 'total_minor' => $grandTotal,
-                'count' => $items->count(),
+                'count' => $count,
+                'returned_count' => $items->count(),
             ],
         ];
     }
@@ -145,7 +148,7 @@ class DeductionController extends Controller
 
         $context = app(TenantContext::class);
         $branchId = $data['branch_id'] ?? $context->branchId;
-        if (!$branchId) {
+        if (! $branchId) {
             $mainBranch = DB::connection('tenant')->table('branches')
                 ->where('tenant_id', $tenantId)
                 ->where('is_main', true)
@@ -177,7 +180,7 @@ class DeductionController extends Controller
             'staff_name' => $staffName,
             'amount_minor' => $data['amount_minor'],
             'currency' => $tenant->currency ?: 'LKR',
-            'date' => $data['date'] ?: $todayStr,
+            'date' => $data['date'] ?? $todayStr,
             'payment_method' => $data['payment_method'] ?? 'cash',
             'notes' => isset($data['notes']) ? trim($data['notes']) : null,
             'created_by' => $request->user()->id,

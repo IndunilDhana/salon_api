@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Access\RoleCatalog;
 use App\Models\Tenant;
 use App\Models\TenantRole;
 use App\Tenancy\TenantContext;
@@ -28,7 +29,7 @@ class ResolveTenant
             abort_unless($tenant->storage_mode === 'shared', 503, 'This salon storage mode is not provisioned.');
             $context->tenant = $tenant;
             $context->role = $role->name;
-            $context->permissions = $role->is_owner ? array_keys(\App\Access\RoleCatalog::permissions()) : $role->permissions;
+            $context->permissions = $role->is_owner ? array_keys(RoleCatalog::permissions()) : $role->permissions;
 
             // Resolve branch permissions for this user
             $assignedBranchIds = DB::connection('central')->table('branch_users')
@@ -46,6 +47,10 @@ class ResolveTenant
             }
 
             $requestedBranch = $request->header('X-Branch') ?: $request->query('branch_id');
+            if ($request->header('X-Branch') && $request->query('branch_id') && $request->header('X-Branch') !== $request->query('branch_id')) {
+                abort(403, 'Conflicting branch selections are not allowed.');
+            }
+            abort_unless($requestedBranch === null || is_string($requestedBranch), 422, 'Choose a valid branch.');
             if ($requestedBranch && $requestedBranch !== 'all') {
                 $branchExists = DB::connection('tenant')->table('branches')
                     ->where('tenant_id', $tenant->id)
@@ -53,7 +58,7 @@ class ResolveTenant
                     ->exists();
                 abort_unless($branchExists, 404, 'The requested branch was not found.');
 
-                if (!$context->hasAllBranchesAccess) {
+                if (! $context->hasAllBranchesAccess) {
                     abort_unless(in_array($requestedBranch, $context->allowedBranchIds, true), 403, 'You do not have access to this branch.');
                 }
                 $context->branchId = $requestedBranch;
@@ -61,7 +66,7 @@ class ResolveTenant
                 abort_unless($context->hasAllBranchesAccess, 403, 'You do not have permission to view all branches.');
                 $context->branchId = null;
             } else {
-                if (!$context->hasAllBranchesAccess && !empty($context->allowedBranchIds)) {
+                if (! $context->hasAllBranchesAccess && ! empty($context->allowedBranchIds)) {
                     $context->branchId = $context->allowedBranchIds[0];
                 } else {
                     $context->branchId = null;

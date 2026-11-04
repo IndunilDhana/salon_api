@@ -10,7 +10,8 @@ class RequirePlatformPermission
     public function handle(Request $request, Closure $next, string $permission)
     {
         abort_unless($request->user()?->is_platform_admin, 403, 'Platform administrator access is required.');
-        abort_unless($request->user()->hasPlatformPermission($permission), 403, "Platform permission [{$permission}] is required.");
+        $allowed = collect(explode('|', $permission))->contains(fn (string $candidate) => $request->user()->hasPlatformPermission($candidate));
+        abort_unless($allowed, 403, "Platform permission [{$permission}] is required.");
 
         return $next($request);
     }

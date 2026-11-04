@@ -10,6 +10,7 @@ class BusinessSubscription extends Model
     use HasUuids;
 
     protected $connection = 'central';
+
     protected $guarded = ['id'];
 
     protected function casts(): array

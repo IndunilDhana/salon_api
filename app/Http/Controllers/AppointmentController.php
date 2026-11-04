@@ -64,14 +64,14 @@ class AppointmentController extends Controller
             if ($end->diffInMinutes($start, true) > 1440) {
                 throw ValidationException::withMessages(['ends_at' => ['Appointments must last no longer than 24 hours.']]);
             }
-            $overlaps = Appointment::where('staff_id', $staff->id)->where('status', '!=', 'cancelled')->where('starts_at', '<', $end)->where('ends_at', '>', $start)->exists();
+            $overlaps = Appointment::withoutGlobalScope('branch')->where('staff_id', $staff->id)->where('status', '!=', 'cancelled')->where('starts_at', '<', $end)->where('ends_at', '>', $start)->exists();
             if ($overlaps) {
                 throw ValidationException::withMessages(['starts_at' => ['This team member already has an appointment at that time.']]);
             }
 
             $context = app(TenantContext::class);
             $branchId = $data['branch_id'] ?? $context->branchId;
-            if (!$branchId) {
+            if (! $branchId) {
                 $mainBranch = DB::connection('tenant')->table('branches')
                     ->where('tenant_id', $context->id())
                     ->where('is_main', true)

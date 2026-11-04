@@ -10,6 +10,7 @@ class SubscriptionPlan extends Model
     use HasUuids;
 
     protected $connection = 'central';
+
     protected $fillable = [
         'name',
         'description',

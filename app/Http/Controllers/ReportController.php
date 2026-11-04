@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Appointment;
+use App\Models\Branch;
 use App\Models\Deduction;
 use App\Models\Order;
 use App\Models\OrderItem;
@@ -10,7 +11,6 @@ use App\Models\Staff;
 use App\Tenancy\TenantContext;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
@@ -40,12 +40,13 @@ class ReportController extends Controller
                 $salaryMultiplier = 1.0;
                 break;
             case 'last_month':
-                $startLocal = $now->subMonth()->startOfMonth()->startOfDay();
-                $endLocal = $now->subMonth()->endOfMonth()->endOfDay();
+                $startLocal = $now->subMonthNoOverflow()->startOfMonth()->startOfDay();
+                $endLocal = $now->subMonthNoOverflow()->endOfMonth()->endOfDay();
                 $salaryMultiplier = 1.0;
                 break;
             case 'all':
-                $startLocal = $now->subYears(5)->startOfDay();
+                $dates = array_filter([Order::min('created_at'), Appointment::min('starts_at'), Deduction::min('date')]);
+                $startLocal = $dates ? collect($dates)->map(fn ($date) => CarbonImmutable::parse($date, 'UTC')->setTimezone($tz))->sort()->first()->startOfDay() : $now->startOfDay();
                 $endLocal = $now->endOfDay();
                 $salaryMultiplier = 12.0;
                 break;
@@ -60,9 +61,15 @@ class ReportController extends Controller
 
         $startUtc = $startLocal->utc();
         $endUtc = $endLocal->utc();
+        $endExclusive = $endLocal->addDay()->startOfDay()->utc();
+        $salaryMultiplier = 0;
+        for ($cursor = $startLocal->startOfDay(); $cursor->lessThanOrEqualTo($endLocal); $cursor = $cursor->startOfMonth()->addMonth()) {
+            $segmentEnd = $cursor->endOfMonth()->min($endLocal)->startOfDay()->addDay();
+            $salaryMultiplier += $cursor->startOfDay()->diffInDays($segmentEnd) / $cursor->daysInMonth;
+        }
 
         // Branch scoping
-        $selectedBranchId = $request->query('branch_id') ?: $context->branchId;
+        $selectedBranchId = $context->branchId;
         if ($selectedBranchId === 'all') {
             $selectedBranchId = null;
         }
@@ -75,8 +82,10 @@ class ReportController extends Controller
         }
 
         // 1. Orders within range
-        $ordersQuery = Order::where('created_at', '>=', $startUtc)
-            ->where('created_at', '<=', $endUtc);
+        $ordersQuery = Order::where(function ($query) use ($startUtc, $endExclusive) {
+            $query->where(fn ($paid) => $paid->paidDuring($startUtc, $endExclusive))
+                ->orWhere(fn ($unpaid) => $unpaid->where('status', 'unpaid')->where('created_at', '>=', $startUtc)->where('created_at', '<', $endExclusive));
+        });
         if ($enforceBranches !== null) {
             $ordersQuery->whereIn('branch_id', $enforceBranches);
         }
@@ -96,7 +105,7 @@ class ReportController extends Controller
         // Payment method breakdown
         $cashOrders = $paidOrders->where('payment_method', 'cash');
         $cardOrders = $paidOrders->where('payment_method', 'card');
-        $otherOrders = $paidOrders->filter(fn ($o) => !in_array($o->payment_method, ['cash', 'card'], true));
+        $otherOrders = $paidOrders->filter(fn ($o) => ! in_array($o->payment_method, ['cash', 'card'], true));
 
         $paymentMethods = [
             'cash' => [
@@ -119,8 +128,8 @@ class ReportController extends Controller
         // Daily trend timeline
         $dailyTrendMap = [];
         foreach ($paidOrders as $order) {
-            $dateKey = CarbonImmutable::parse($order->created_at)->setTimezone($tz)->toDateString();
-            if (!isset($dailyTrendMap[$dateKey])) {
+            $dateKey = CarbonImmutable::parse($order->paid_at ?? $order->created_at)->setTimezone($tz)->toDateString();
+            if (! isset($dailyTrendMap[$dateKey])) {
                 $dailyTrendMap[$dateKey] = [
                     'date' => $dateKey,
                     'total_minor' => 0,
@@ -189,7 +198,7 @@ class ReportController extends Controller
 
         // 3. Services & Products breakdown
         $paidOrderIds = $paidOrders->pluck('id')->all();
-        $orderItems = !empty($paidOrderIds)
+        $orderItems = ! empty($paidOrderIds)
             ? OrderItem::whereIn('order_id', $paidOrderIds)->get()
             : collect([]);
 
@@ -199,8 +208,8 @@ class ReportController extends Controller
         $totalItemsSold = 0;
 
         foreach ($orderItems as $item) {
-            $key = $item->name . '::' . $item->type;
-            if (!isset($itemsGrouped[$key])) {
+            $key = $item->name.'::'.$item->type;
+            if (! isset($itemsGrouped[$key])) {
                 $itemsGrouped[$key] = [
                     'name' => $item->name,
                     'type' => $item->type,
@@ -324,8 +333,7 @@ class ReportController extends Controller
         ];
 
         // 6. Branch comparison table
-        $allBranches = DB::connection('tenant')->table('branches')
-            ->where('tenant_id', $tenant->id)
+        $allBranches = Branch::query()
             ->where('active', true)
             ->orderByDesc('is_main')
             ->orderBy('name')

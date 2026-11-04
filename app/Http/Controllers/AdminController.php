@@ -13,8 +13,12 @@ use Illuminate\Validation\Rule;
 
 class AdminController extends Controller
 {
-    public function dashboard()
+    public function dashboard(Request $request)
     {
+        $canViewMetrics = $request->user()->hasPlatformPermission('platform.dashboard.view');
+        $canViewTenants = $request->user()->hasPlatformPermission('platform.tenants.view')
+            || $request->user()->hasPlatformPermission('platform.subscriptions.manage');
+        $canViewUsers = $request->user()->hasPlatformPermission('platform.users.view');
         $owners = DB::connection('central')->table('memberships')
             ->join('tenant_roles', 'memberships.role_id', '=', 'tenant_roles.id')
             ->join('users', 'memberships.user_id', '=', 'users.id')
@@ -35,33 +39,31 @@ class AdminController extends Controller
             ->where('current_period_end', '>', now('UTC'))
             ->get();
 
-        $mrrMinor = 0;
+        $mrrByCurrency = [];
         foreach ($activeSubs as $sub) {
-            if ($sub->billing_interval === 'year') {
-                $mrrMinor += (int) round($sub->price_minor / 12);
-            } else {
-                $mrrMinor += $sub->price_minor;
-            }
+            $mrrByCurrency[$sub->currency] = ($mrrByCurrency[$sub->currency] ?? 0)
+                + ($sub->billing_interval === 'year' ? (int) round($sub->price_minor / 12) : $sub->price_minor);
         }
 
         return [
-            'metrics' => [
+            'metrics' => $canViewMetrics ? [
                 'businesses' => Tenant::count(),
                 'active_businesses' => Tenant::where('status', 'active')->count(),
                 'users' => User::count(),
                 'active_paid_subscriptions' => $activePaidCount,
                 'active_trials' => $trialCount,
-                'mrr_minor' => $mrrMinor,
-            ],
-            'tenants' => Tenant::with('subscription')->orderBy('name')->get()->map(fn ($tenant) => [
+                'mrr_minor' => $mrrByCurrency['LKR'] ?? 0,
+                'mrr_by_currency' => $mrrByCurrency,
+            ] : null,
+            'tenants' => $canViewTenants ? Tenant::with('subscription')->orderBy('name')->get()->map(fn ($tenant) => [
                 ...$tenant->only(['id', 'name', 'slug', 'currency', 'timezone', 'storage_mode', 'status', 'created_at']),
                 'owner_email' => $owners->get($tenant->id)?->email,
                 'subscription' => app(SubscriptionService::class)->summary($tenant->subscription),
-            ]),
-            'users' => User::with('platformRole')->orderBy('name')->get(['id', 'name', 'email', 'is_platform_admin', 'platform_role_id', 'created_at'])->map(fn ($user) => [
+            ]) : [],
+            'users' => $canViewUsers ? User::with('platformRole')->orderBy('name')->get(['id', 'name', 'email', 'is_platform_admin', 'platform_role_id', 'created_at'])->map(fn ($user) => [
                 ...$user->only(['id', 'name', 'email', 'is_platform_admin', 'platform_role_id', 'created_at']),
                 'platform_role' => $user->platformRole?->name ?? ($user->is_platform_admin ? 'Super Administrator' : null),
-            ]),
+            ]) : [],
         ];
     }
 
@@ -78,7 +80,7 @@ class AdminController extends Controller
             'cancelled' => 0,
         ];
         $planDistribution = [];
-        $mrrMinor = 0;
+        $mrrByCurrency = [];
 
         foreach ($subs as $sub) {
             $summary = app(SubscriptionService::class)->summary($sub);
@@ -89,9 +91,8 @@ class AdminController extends Controller
             $planDistribution[$planName] = ($planDistribution[$planName] ?? 0) + 1;
 
             if ($effectiveStatus === 'active') {
-                $mrrMinor += ($sub->billing_interval === 'year')
-                    ? (int) round($sub->price_minor / 12)
-                    : $sub->price_minor;
+                $mrrByCurrency[$sub->currency] = ($mrrByCurrency[$sub->currency] ?? 0)
+                    + ($sub->billing_interval === 'year' ? (int) round($sub->price_minor / 12) : $sub->price_minor);
             }
         }
 
@@ -117,17 +118,27 @@ class AdminController extends Controller
         $activeTenants = Tenant::where('status', 'active')->count();
 
         $totalOrders = DB::connection('tenant')->table('orders')->count();
-        $totalGmvMinor = DB::connection('tenant')->table('orders')->where('status', 'paid')->sum('total_minor');
+        $gmvByCurrency = DB::connection('tenant')->table('orders')->where('status', 'paid')
+            ->selectRaw('currency, SUM(total_minor) as total')->groupBy('currency')->pluck('total', 'currency')->all();
+        $currencies = array_unique([...array_keys($mrrByCurrency), ...array_keys($gmvByCurrency)]);
+        sort($currencies);
+        $financials = array_map(fn ($currency) => [
+            'currency' => $currency,
+            'mrr_minor' => $mrrByCurrency[$currency] ?? 0,
+            'arr_minor' => ($mrrByCurrency[$currency] ?? 0) * 12,
+            'total_gmv_minor' => (int) ($gmvByCurrency[$currency] ?? 0),
+        ], $currencies ?: ['LKR']);
         $totalAppointments = DB::connection('tenant')->table('appointments')->count();
         $completedAppointments = DB::connection('tenant')->table('appointments')->where('status', 'completed')->count();
         $totalStaff = DB::connection('tenant')->table('staff')->count();
 
         return [
             'financials' => [
-                'mrr_minor' => $mrrMinor,
-                'arr_minor' => $mrrMinor * 12,
-                'total_gmv_minor' => (int) $totalGmvMinor,
+                'mrr_minor' => $mrrByCurrency['LKR'] ?? 0,
+                'arr_minor' => ($mrrByCurrency['LKR'] ?? 0) * 12,
+                'total_gmv_minor' => (int) ($gmvByCurrency['LKR'] ?? 0),
                 'currency' => 'LKR',
+                'by_currency' => $financials,
             ],
             'subscriptions' => [
                 'total' => count($subs),

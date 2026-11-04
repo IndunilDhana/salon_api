@@ -75,7 +75,7 @@ class OrderService
 
             $context = app(TenantContext::class);
             $branchId = $data['branch_id'] ?? $context->branchId;
-            if (!$branchId) {
+            if (! $branchId) {
                 $mainBranch = DB::connection('tenant')->table('branches')
                     ->where('tenant_id', $context->id())
                     ->where('is_main', true)

@@ -14,6 +14,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
+use Laravel\Sanctum\PersonalAccessToken;
 
 class AuthController extends Controller
 {
@@ -30,8 +31,7 @@ class AuthController extends Controller
             'currency' => ['sometimes', Rule::in(['LKR', 'USD', 'GBP', 'EUR', 'INR', 'AUD'])],
             'timezone' => ['sometimes', 'timezone'],
         ]);
-        $tenant = null;
-        $user = DB::connection('central')->transaction(function () use ($data, &$tenant) {
+        $user = DB::connection('central')->transaction(function () use ($data) {
             $user = User::create(['name' => $data['name'], 'email' => strtolower($data['email']), 'password' => $data['password']]);
             $tenant = Tenant::create(['name' => $data['salon_name'], 'slug' => $data['slug'], 'currency' => $data['currency'] ?? 'LKR', 'timezone' => $data['timezone'] ?? 'Asia/Colombo', 'storage_mode' => 'shared']);
             $roles = RoleCatalog::seed($tenant);
@@ -41,17 +41,6 @@ class AuthController extends Controller
 
             return $user;
         });
-
-        DB::connection('tenant')->table('branches')->insert([
-            'id' => (string) Str::uuid(),
-            'tenant_id' => $tenant->id,
-            'name' => 'Main Branch',
-            'code' => 'MAIN',
-            'is_main' => true,
-            'active' => true,
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
 
         return response()->json($this->session($user, true), 201);
     }
@@ -90,8 +79,9 @@ class AuthController extends Controller
 
         $data = ['user' => $userData, 'tenants' => $user->tenants->map(function ($tenant) {
             $role = TenantRole::where('tenant_id', $tenant->id)->find($tenant->pivot->role_id);
+            $hasAllBranches = $role?->is_owner || ! DB::connection('central')->table('branch_users')->where('tenant_id', $tenant->id)->where('user_id', $tenant->pivot->user_id)->exists();
 
-            return [...$tenant->only(['id', 'name', 'slug', 'currency', 'timezone', 'storage_mode', 'status']), 'role' => $role?->name ?? '', 'permissions' => $role?->is_owner ? array_keys(\App\Access\RoleCatalog::permissions()) : ($role?->permissions ?? []), 'subscription' => app(SubscriptionService::class)->summary($tenant->subscription)];
+            return [...$tenant->only(['id', 'name', 'slug', 'currency', 'timezone', 'storage_mode', 'status']), 'needs_branch_setup' => $tenant->storage_mode === 'shared' && ! $tenant->hasActiveBranch(), 'has_all_branches_access' => (bool) $hasAllBranches, 'role' => $role?->name ?? '', 'permissions' => $role?->is_owner ? array_keys(RoleCatalog::permissions()) : ($role?->permissions ?? []), 'subscription' => app(SubscriptionService::class)->summary($tenant->subscription)];
         })->values()];
         $expirationMinutes = (int) (config('sanctum.expiration') ?? 480);
         $expiresAt = now()->addMinutes($expirationMinutes);
@@ -101,9 +91,9 @@ class AuthController extends Controller
             $data['expires_at'] = $expiresAt->toIso8601String();
         } else {
             $token = $user->currentAccessToken();
-            if ($token instanceof \Laravel\Sanctum\PersonalAccessToken && $token->expires_at) {
+            if ($token instanceof PersonalAccessToken && $token->expires_at) {
                 $data['expires_at'] = $token->expires_at->toIso8601String();
-            } elseif ($token instanceof \Laravel\Sanctum\PersonalAccessToken && $token->created_at) {
+            } elseif ($token instanceof PersonalAccessToken && $token->created_at) {
                 $data['expires_at'] = $token->created_at->addMinutes($expirationMinutes)->toIso8601String();
             }
         }

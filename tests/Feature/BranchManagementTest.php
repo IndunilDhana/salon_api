@@ -4,24 +4,18 @@ namespace Tests\Feature;
 
 use App\Models\Branch;
 use App\Models\BusinessSubscription;
-use App\Models\CatalogItem;
 use App\Models\SubscriptionPlan;
-use App\Models\Tenant;
-use App\Models\TenantRole;
-use App\Models\User;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class BranchManagementTest extends TestCase
 {
-
     private function branchHeaders(string $token, string $slug, ?string $branchId = null): array
     {
         $headers = $this->headers($token, $slug);
         if ($branchId !== null) {
             $headers['X-Branch'] = $branchId;
         }
+
         return $headers;
     }
 
@@ -107,7 +101,7 @@ class BranchManagementTest extends TestCase
         $this->assertSame(1500000, $subRes3['total_price_minor']);
 
         // Deactivate Branch C -> dynamic price automatically decreases back to 2 branches!
-        $this->patchJson('/api/v1/branches/' . $branchC['id'], [
+        $this->patchJson('/api/v1/branches/'.$branchC['id'], [
             'active' => false,
         ], $headers)->assertOk();
 
@@ -158,7 +152,7 @@ class BranchManagementTest extends TestCase
         // Assign Branch Cashier role
         $members = $this->getJson('/api/v1/access', $headers)->json('members');
         $stylistMember = collect($members)->firstWhere('user.email', 'stylist2@salon.test');
-        $this->patchJson('/api/v1/access/members/' . $stylistMember['id'], [
+        $this->patchJson('/api/v1/access/members/'.$stylistMember['id'], [
             'role_id' => $role['id'],
             'branch_ids' => [$branch2['id']],
         ], $headers)->assertOk();
@@ -244,7 +238,7 @@ class BranchManagementTest extends TestCase
         $this->assertSame(200000, $kandyComparison['revenue_minor']);
 
         // 2. Individual report filtered for Kandy Branch only: Revenue = Rs. 2,000
-        $kandyReport = $this->getJson('/api/v1/reports?range=today&branch_id=' . $branch2['id'], $headers)->assertOk()->json();
+        $kandyReport = $this->getJson('/api/v1/reports?range=today&branch_id='.$branch2['id'], $headers)->assertOk()->json();
         $this->assertFalse($kandyReport['meta']['is_centralized']);
         $this->assertSame($branch2['id'], $kandyReport['meta']['branch_id']);
         $this->assertSame(200000, $kandyReport['sales']['gross_revenue_minor']);
