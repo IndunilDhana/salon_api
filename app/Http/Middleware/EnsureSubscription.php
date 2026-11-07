@@ -2,8 +2,8 @@
 
 namespace App\Http\Middleware;
 
-use App\Domain\Subscriptions\SubscriptionService;
-use App\Tenancy\TenantContext;
+use App\Infrastructure\Tenancy\TenantContext;
+use App\Modules\Shared\Subscriptions\Contracts\SubscriptionReaderInterface;
 use Closure;
 use Illuminate\Http\Request;
 
@@ -11,7 +11,7 @@ class EnsureSubscription
 {
     public function handle(Request $request, Closure $next, ?string $feature = null)
     {
-        $summary = app(SubscriptionService::class)->summary(app(TenantContext::class)->tenant->subscription);
+        $summary = app(SubscriptionReaderInterface::class)->summary(app(TenantContext::class)->tenant->subscription);
         if (! $summary || ! $summary['access_allowed']) {
             return response()->json(['message' => 'This business needs an active subscription. Open Subscription to review your access.', 'code' => 'subscription_required'], 403);
         }

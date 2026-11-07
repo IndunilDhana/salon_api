@@ -31,20 +31,54 @@ The non-destructive demo seeder is restricted to `local` and `testing` environme
 
 The platform admin account has no implicit access to salon operations. Business access always needs a membership. Use real credentials and an explicit administrative provisioning process outside local development; the demo seeder refuses production.
 
-## Structure
+## Modular Architecture
+
+The application is structured as a **Modular Monolith**, cleanly separating Platform (SaaS Administration) and Business (Salon Operations), mirrored with the Next.js frontend architecture:
 
 ```text
-app/Access/                 Permission catalog and built-in role defaults
-app/Domain/Orders/          Transactional bill totals, snapshots, and payment transitions
-app/Http/Controllers/       Separate auth, platform, access, catalog, order, staff, appointment, payroll controllers
-app/Http/Middleware/        Tenant resolution, permission and platform-admin enforcement
-app/Http/Requests/          Payroll request validation
-app/Http/Resources/         Appointment serialization shared by dashboard and booking list
-app/Models/                 Explicit central models and tenant-scoped business models
-app/Domain/Payroll/         Monthly payroll draft snapshots
-app/Tenancy/                Request-scoped tenant context, always cleared after use
-database/migrations/        Central and operational schemas with explicit connection boundaries
-tests/Feature/              Isolation, role management, payroll, catalog, and billing integration tests
+app/
+├── Modules/
+│   ├── Platform/               # SaaS Administration
+│   │   ├── Access/             # Platform roles & permission catalog
+│   │   ├── Businesses/         # Salon business directory & status management
+│   │   ├── Dashboard/          # SaaS metrics & overview
+│   │   ├── Plans/              # Subscription package CRUD & features
+│   │   ├── Reports/            # Platform financial, MRR & growth reports
+│   │   └── Subscriptions/      # Business subscription lifecycle, renewals & trials
+│   │
+│   ├── Business/               # Salon Operations
+│   │   ├── Access/             # Salon-scoped roles & staff memberships
+│   │   ├── Appointments/       # Booking, scheduling & completion
+│   │   ├── Billing/            # POS, bill line snapshots & manual payments
+│   │   ├── Branches/           # Branch locations, switching & pricing sync
+│   │   ├── Catalog/            # Products & services catalog
+│   │   ├── Dashboard/          # Salon-local metrics & financial position
+│   │   ├── Deductions/         # Expenses & staff salary advances
+│   │   ├── Payroll/            # Monthly draft generation & snapshots
+│   │   ├── Reports/            # Operational reports, sales & staff analytics
+│   │   ├── Subscription/       # Business subscription & entitlement view
+│   │   └── Team/               # Staff profiles & compensation
+│   │
+│   └── Shared/                 # Shared Contracts & Domain Utilities
+│       ├── Auth/               # Authentication & session controllers
+│       ├── Subscriptions/      # Subscription contracts & feature catalog
+│       └── Support/            # Common API response helpers
+│
+├── Infrastructure/             # Technical Infrastructure
+│   ├── Tenancy/                # Tenant context & request resolver
+│   └── Money/                  # Currency primitives & formatting
+│
+├── Http/
+│   └── Middleware/             # Tenant, permission, branch setup & subscription gates
+│
+└── Models/                     # Eloquent models (central & tenant-scoped)
+
+routes/
+├── api.php                     # Route registry (v1 prefix)
+└── api/
+    ├── auth.php                # Authentication endpoints
+    ├── platform.php            # Platform SaaS administration endpoints
+    └── business.php            # Business operational endpoints
 ```
 
 `central` and `tenant` are logical database connections. Both initially point at the same MySQL database. Users, salons, roles, memberships, and API tokens remain central. Business tables contain `tenant_id`, use a fail-closed model scope, and have composite foreign keys where they reference another tenant table. There are no business-to-central database foreign keys to prevent a future extraction from depending on cross-database constraints.
