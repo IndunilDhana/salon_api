@@ -5,6 +5,7 @@ namespace App\Modules\Business\Branches\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Tenancy\TenantContext;
 use App\Models\Branch;
+use App\Models\Staff;
 use App\Modules\Shared\Subscriptions\Contracts\SubscriptionReaderInterface;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\JsonResponse;
@@ -74,6 +75,11 @@ class BranchController extends Controller
     {
         $context = app(TenantContext::class);
         $tenantId = $context->id();
+        $owner = $request->user();
+        if ($request->exists('phone')) {
+            $phone = trim((string) $request->input('phone'));
+            $request->merge(['phone' => $phone === '' ? null : $phone]);
+        }
 
         $data = $request->validate([
             'name' => [
@@ -83,14 +89,14 @@ class BranchController extends Controller
                 Rule::unique('tenant.branches', 'name')->where('tenant_id', $tenantId),
             ],
             'code' => ['nullable', 'string', 'max:32'],
-            'phone' => ['nullable', 'string', 'max:40'],
+            'phone' => ['nullable', 'string', 'max:40', Rule::unique('tenant.branches', 'phone')],
             'address' => ['nullable', 'string', 'max:255'],
             'active' => ['sometimes', 'boolean'],
         ]);
 
         try {
-            $branch = Cache::lock('branches:create:'.$tenantId, 30)->block(5, function () use ($data, $context, $tenantId, $subscriptionService) {
-                return DB::connection('tenant')->transaction(function () use ($data, $context, $tenantId, $subscriptionService) {
+            $branch = Cache::lock('branches:create:'.$tenantId, 30)->block(5, function () use ($data, $context, $tenantId, $subscriptionService, $owner) {
+                return DB::connection('tenant')->transaction(function () use ($data, $context, $tenantId, $subscriptionService, $owner) {
                     $isFirst = ! DB::connection('tenant')->table('branches')->where('tenant_id', $tenantId)->exists();
                     if ($isFirst) {
                         abort_unless($context->hasAllBranchesAccess, 403, 'First branch setup requires access to the whole business.');
@@ -100,7 +106,7 @@ class BranchController extends Controller
                         abort_unless(in_array('branches', $subscription['features'] ?? [], true), 403, 'Multiple branches are not included in this business subscription.');
                     }
 
-                    return Branch::create([
+                    $branch = Branch::create([
                         'name' => trim($data['name']),
                         'code' => isset($data['code']) ? strtoupper(trim($data['code'])) : null,
                         'phone' => isset($data['phone']) ? trim($data['phone']) : null,
@@ -108,6 +114,22 @@ class BranchController extends Controller
                         'is_main' => $isFirst,
                         'active' => $data['active'] ?? true,
                     ]);
+
+                    if ($isFirst) {
+                        Staff::create([
+                            'user_id' => $owner->id,
+                            'name' => $owner->name,
+                            'email' => $owner->email,
+                            'phone' => $owner->phone,
+                            'job_title' => 'Owner',
+                            'base_salary_minor' => 0,
+                            'commission_bps' => 0,
+                            'active' => true,
+                            'branch_id' => $branch->id,
+                        ]);
+                    }
+
+                    return $branch;
                 }, 3);
             });
         } catch (LockTimeoutException) {
@@ -129,6 +151,10 @@ class BranchController extends Controller
     {
         $context = app(TenantContext::class);
         $branch = Branch::findOrFail($id);
+        if ($request->exists('phone')) {
+            $phone = trim((string) $request->input('phone'));
+            $request->merge(['phone' => $phone === '' ? null : $phone]);
+        }
 
         $data = $request->validate([
             'name' => [
@@ -138,7 +164,7 @@ class BranchController extends Controller
                 Rule::unique('tenant.branches', 'name')->where('tenant_id', $context->id())->ignore($id),
             ],
             'code' => ['nullable', 'string', 'max:32'],
-            'phone' => ['nullable', 'string', 'max:40'],
+            'phone' => ['nullable', 'string', 'max:40', Rule::unique('tenant.branches', 'phone')->ignore($id)],
             'address' => ['nullable', 'string', 'max:255'],
             'active' => ['sometimes', 'boolean'],
         ]);

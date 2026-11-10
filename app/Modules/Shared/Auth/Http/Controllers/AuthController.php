@@ -3,6 +3,7 @@
 namespace App\Modules\Shared\Auth\Http\Controllers;
 
 use App\Http\Controllers\Controller;
+use Google\Client as GoogleClient;
 use App\Models\Tenant;
 use App\Models\TenantRole;
 use App\Models\User;
@@ -58,29 +59,113 @@ class AuthController extends Controller
 
     public function register(Request $request, SubscriptionReaderInterface $subscriptionService)
     {
-        $request->merge(['email' => strtolower(trim((string) $request->input('email')))]);
+        $request->merge([
+            'email' => strtolower(trim((string) $request->input('email'))),
+            'phone' => trim((string) $request->input('phone')),
+        ]);
         $data = $request->validate([
             'name' => ['required', 'string', 'max:100'],
             'email' => ['required', 'email', 'max:255', Rule::unique('central.users', 'email')],
             'password' => ['required', 'confirmed', 'max:72', Password::min(8)],
             'is_platform_admin' => ['prohibited'],
             'salon_name' => ['required', 'string', 'max:100'],
-            'slug' => ['required', 'regex:/^[a-z0-9][a-z0-9-]{1,63}$/', Rule::unique('central.tenants', 'slug')],
+            'phone' => ['required', 'string', 'max:40', Rule::unique('central.users', 'phone')],
             'currency' => ['sometimes', Rule::in(['LKR', 'USD', 'GBP', 'EUR', 'INR', 'AUD'])],
             'timezone' => ['sometimes', 'timezone'],
         ]);
-        $user = DB::connection('central')->transaction(function () use ($data, $subscriptionService) {
-            $user = User::create(['name' => $data['name'], 'email' => strtolower($data['email']), 'password' => $data['password']]);
-            $tenant = Tenant::create(['name' => $data['salon_name'], 'slug' => $data['slug'], 'currency' => $data['currency'] ?? 'LKR', 'timezone' => $data['timezone'] ?? 'Asia/Colombo', 'storage_mode' => 'shared']);
-            $roles = RoleCatalog::seed($tenant);
-            $owner = $roles['owner'];
-            $user->tenants()->attach($tenant->id, ['id' => (string) Str::uuid(), 'role' => $owner->name, 'role_id' => $owner->id]);
+        $user = $this->createWorkspaceOwner($data, $subscriptionService);
+
+        return response()->json($this->session($user, true, $subscriptionService), 201);
+    }
+
+    public function registerWithGoogle(Request $request, SubscriptionReaderInterface $subscriptionService)
+    {
+        $request->merge(['phone' => trim((string) $request->input('phone'))]);
+        $data = $request->validate([
+            'credential' => ['required', 'string', 'max:8192'],
+            'salon_name' => ['required', 'string', 'max:100'],
+            'phone' => ['required', 'string', 'max:40', Rule::unique('central.users', 'phone')],
+            'currency' => ['sometimes', Rule::in(['LKR', 'USD', 'GBP', 'EUR', 'INR', 'AUD'])],
+            'timezone' => ['sometimes', 'timezone'],
+        ]);
+
+        $clientId = (string) config('services.google.client_id', '');
+        if ($clientId === '') {
+            return response()->json(['message' => 'Google workspace creation is not configured.'], 503);
+        }
+
+        try {
+            $claims = (new GoogleClient(['client_id' => $clientId]))->verifyIdToken($data['credential']);
+        } catch (\Throwable) {
+            $claims = false;
+        }
+
+        if (! is_array($claims) || empty($claims['sub'])) {
+            throw ValidationException::withMessages([
+                'credential' => ['Google sign-in could not be verified. Please try again.'],
+            ]);
+        }
+
+        $email = Str::lower(trim((string) ($claims['email'] ?? '')));
+        $emailVerified = filter_var($claims['email_verified'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        if (! $emailVerified || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            throw ValidationException::withMessages([
+                'credential' => ['Choose a Google account with a verified email address.'],
+            ]);
+        }
+
+        if (User::where('email', $email)->exists()) {
+            throw ValidationException::withMessages([
+                'email' => ['An account already exists for this Google email. Sign in to that account instead.'],
+            ]);
+        }
+
+        $name = trim((string) ($claims['name'] ?? '')) ?: Str::before($email, '@');
+        $user = $this->createWorkspaceOwner([
+            ...$data,
+            'name' => Str::limit($name, 100, ''),
+            'email' => $email,
+            'password' => Str::random(64),
+        ], $subscriptionService);
+
+        return response()->json($this->session($user, true, $subscriptionService), 201);
+    }
+
+    private function createWorkspaceOwner(array $data, SubscriptionReaderInterface $subscriptionService): User
+    {
+        return DB::connection('central')->transaction(function () use ($data, $subscriptionService) {
+            $user = User::create([
+                'name' => $data['name'],
+                'email' => Str::lower($data['email']),
+                'phone' => trim($data['phone']),
+                'password' => $data['password'],
+            ]);
+            $baseSlug = substr(Str::slug($data['salon_name']) ?: 'salon', 0, 64);
+            if (strlen($baseSlug) < 2) {
+                $baseSlug = 'salon-'.$baseSlug;
+            }
+            $slug = $baseSlug;
+            for ($suffix = 2; Tenant::where('slug', $slug)->exists(); $suffix++) {
+                $ending = '-'.$suffix;
+                $slug = rtrim(substr($baseSlug, 0, 64 - strlen($ending)), '-').$ending;
+            }
+            $tenant = Tenant::create([
+                'name' => $data['salon_name'],
+                'slug' => $slug,
+                'currency' => $data['currency'] ?? 'LKR',
+                'timezone' => $data['timezone'] ?? 'Asia/Colombo',
+                'storage_mode' => 'shared',
+            ]);
+            $owner = RoleCatalog::seed($tenant)['owner'];
+            $user->tenants()->attach($tenant->id, [
+                'id' => (string) Str::uuid(),
+                'role' => $owner->name,
+                'role_id' => $owner->id,
+            ]);
             $subscriptionService->beginTrial($tenant);
 
             return $user;
         });
-
-        return response()->json($this->session($user, true, $subscriptionService), 201);
     }
 
     public function login(Request $request, SubscriptionReaderInterface $subscriptionService)
@@ -110,7 +195,7 @@ class AuthController extends Controller
     {
         $subscriptionService ??= app(SubscriptionReaderInterface::class);
 
-        $userData = $user->only(['id', 'name', 'email', 'is_platform_admin']);
+        $userData = $user->only(['id', 'name', 'email', 'phone', 'is_platform_admin']);
         if ($user->is_platform_admin) {
             $userData['platform_role'] = $user->platformRole?->name ?? 'Super Administrator';
             $userData['platform_role_id'] = $user->platform_role_id;

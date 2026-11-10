@@ -17,6 +17,34 @@ class SalonApiTest extends TestCase
         return ['name' => 'Test Stylist', 'job_title' => 'Stylist', 'base_salary_minor' => 5000000, 'commission_bps' => 1250, 'active' => true];
     }
 
+    public function test_workspace_registration_rejects_duplicate_owner_phone_numbers(): void
+    {
+        $phone = '0775550123';
+        $this->postJson('/api/v1/register', [
+            'name' => 'First Owner',
+            'email' => 'phone-first@example.test',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+            'salon_name' => 'First Salon',
+            'phone' => $phone,
+        ])->assertCreated();
+
+        $this->postJson('/api/v1/register', [
+            'name' => 'Second Owner',
+            'email' => 'phone-second@example.test',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+            'salon_name' => 'Second Salon',
+            'phone' => $phone,
+        ])->assertUnprocessable()->assertJsonValidationErrors('phone');
+
+        $this->postJson('/api/v1/google/register', [
+            'credential' => 'invalid-token',
+            'salon_name' => 'Third Salon',
+            'phone' => $phone,
+        ])->assertUnprocessable()->assertJsonValidationErrors('phone');
+    }
+
     public function test_authentication_and_tenant_isolation_are_enforced(): void
     {
         $one = $this->registerOwner();

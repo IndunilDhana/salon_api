@@ -39,6 +39,15 @@ class BranchSetupTest extends TestCase
         $this->assertSame(0, DB::connection('tenant')->table('branches')->count());
         $first = $this->postJson('/api/v1/branches', ['name' => 'Colombo Studio', 'code' => 'col', 'phone' => '0112345678', 'address' => 'Colombo', 'active' => true], $headers)
             ->assertCreated()->assertJsonPath('data.is_main', true)->assertJsonPath('data.active', true)->assertJsonPath('data.code', 'COL')->assertJsonPath('subscription.active_branches_count', 1)->json('data.id');
+        $ownerStaff = DB::connection('tenant')->table('staff')->where('tenant_id', $owner['tenants'][0]['id'])->where('user_id', $owner['user']['id'])->first();
+        $this->assertNotNull($ownerStaff);
+        $this->assertSame($first, $ownerStaff->branch_id);
+        $this->assertSame($owner['user']['name'], $ownerStaff->name);
+        $this->assertSame($owner['user']['email'], $ownerStaff->email);
+        $this->assertSame($owner['user']['phone'], $ownerStaff->phone);
+        $this->assertSame('Owner', $ownerStaff->job_title);
+        $this->assertSame(0, (int) $ownerStaff->base_salary_minor);
+        $this->assertSame(0, (int) $ownerStaff->commission_bps);
         $this->getJson('/api/v1/me', $headers)->assertOk()->assertJsonPath('tenants.0.needs_branch_setup', false);
         $this->postJson('/api/v1/login', ['email' => 'owner@example.test', 'password' => 'password'])->assertOk()->assertJsonPath('tenants.0.needs_branch_setup', false);
         $this->getJson('/api/v1/dashboard', $headers)->assertOk();
@@ -46,6 +55,38 @@ class BranchSetupTest extends TestCase
         $this->patchJson('/api/v1/branches/'.$first, ['active' => false], $headers)->assertUnprocessable();
         $this->deleteJson('/api/v1/branches/'.$first, [], $headers)->assertUnprocessable();
         $this->postJson('/api/v1/branches', ['name' => 'Second Location'], $headers)->assertCreated()->assertJsonPath('data.is_main', false);
+    }
+
+    public function test_branch_phone_numbers_are_unique_globally(): void
+    {
+        $owner = $this->registerOwner(completeBranchSetup: false);
+        $headers = $this->headers($owner['token'], 'studio-test');
+        $phone = '0112345678';
+
+        $firstId = $this->postJson('/api/v1/branches', [
+            'name' => 'First Phone Branch',
+            'phone' => $phone,
+        ], $headers)->assertCreated()->json('data.id');
+
+        $secondId = $this->postJson('/api/v1/branches', [
+            'name' => 'Second Phone Branch',
+        ], $headers)->assertCreated()->json('data.id');
+
+        $this->postJson('/api/v1/branches', [
+            'name' => 'Duplicate Phone Branch',
+            'phone' => '  '.$phone.'  ',
+        ], $headers)->assertUnprocessable()->assertJsonValidationErrors('phone');
+
+        $this->patchJson('/api/v1/branches/'.$secondId, ['phone' => $phone], $headers)
+            ->assertUnprocessable()->assertJsonValidationErrors('phone');
+        $this->patchJson('/api/v1/branches/'.$firstId, ['phone' => $phone], $headers)->assertOk();
+
+        $other = $this->registerOwner('other-phone-owner@example.test', 'other-phone-studio', false);
+        $otherHeaders = $this->headers($other['token'], 'other-phone-studio');
+        $this->postJson('/api/v1/branches', [
+            'name' => 'Other Workspace Branch',
+            'phone' => $phone,
+        ], $otherHeaders)->assertUnprocessable()->assertJsonValidationErrors('phone');
     }
 
     public function test_single_branch_plan_allows_setup_but_refuses_additional_locations(): void
@@ -87,3 +128,4 @@ class BranchSetupTest extends TestCase
         $this->assertSame(0, DB::connection('tenant')->table('branches')->count());
     }
 }
+

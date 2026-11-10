@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::middleware('throttle:auth')->group(function () {
     Route::post('register', [AuthController::class, 'register']);
+    Route::post('google/register', [AuthController::class, 'registerWithGoogle']);
     Route::post('login', [AuthController::class, 'login']);
     Route::post('forgot-password', [AuthController::class, 'forgotPassword']);
     Route::post('reset-password', [AuthController::class, 'resetPassword']);
