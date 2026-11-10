@@ -27,7 +27,9 @@ class BusinessSubscription extends Model
             'trial_ends_at' => 'immutable_datetime',
             'current_period_start' => 'immutable_datetime',
             'current_period_end' => 'immutable_datetime',
+            'grace_period_ends_at' => 'immutable_datetime',
             'cancelled_at' => 'immutable_datetime',
+            'access_allowed' => 'boolean',
         ];
     }
 }

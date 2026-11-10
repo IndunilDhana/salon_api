@@ -2,7 +2,7 @@
 
 namespace App\Models;
 
-use App\Tenancy\TenantContext;
+use App\Infrastructure\Tenancy\TenantContext;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
