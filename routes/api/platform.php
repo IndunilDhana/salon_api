@@ -7,9 +7,13 @@ use App\Modules\Platform\Plans\Http\Controllers\PlanController;
 use App\Modules\Platform\Reports\Http\Controllers\PlatformReportController;
 use App\Modules\Platform\Subscriptions\Http\Controllers\PlatformRenewalController;
 use App\Modules\Platform\Subscriptions\Http\Controllers\PlatformSubscriptionController;
+use App\Modules\Platform\Settings\Http\Controllers\PlatformPaymentSettingsController;
 use Illuminate\Support\Facades\Route;
 
+Route::get('admin/payment-settings', [PlatformPaymentSettingsController::class, 'show']);
+
 Route::middleware('platform_admin')->prefix('admin')->group(function () {
+    Route::patch('payment-settings', [PlatformPaymentSettingsController::class, 'update'])->middleware('platform_permission:platform.subscriptions.manage');
     Route::get('dashboard', [PlatformDashboardController::class, 'dashboard'])->middleware('platform_permission:platform.dashboard.view|platform.tenants.view|platform.subscriptions.manage|platform.users.view');
     Route::get('reports', [PlatformReportController::class, 'reports'])->middleware('platform_permission:platform.reports.view');
     Route::patch('tenants/{id}', [PlatformBusinessController::class, 'updateTenant'])->middleware('platform_permission:platform.tenants.manage');
